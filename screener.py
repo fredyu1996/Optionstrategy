@@ -1,6 +1,5 @@
 """
-screener.py
-Core data fetching and analysis module for S&P 500 options screener.
+screener.py - Core data fetching and analysis module for S&P 500 Options Screener
 """
 
 import yfinance as yf
@@ -10,398 +9,380 @@ from datetime import datetime, timedelta
 import warnings
 import streamlit as st
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings('ignore')
 
-# ---------------------------------------------------------------------------
 # Fallback S&P 500 tickers (top 50 by market cap) if Wikipedia fetch fails
-# ---------------------------------------------------------------------------
 FALLBACK_TICKERS = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "AVGO", "JPM",
-    "LLY", "UNH", "V", "XOM", "MA", "JNJ", "PG", "COST", "HD", "MRK",
-    "ABBV", "CVX", "KO", "PEP", "BAC", "WMT", "ORCL", "NFLX", "CRM", "AMD",
-    "MCD", "TMO", "LIN", "ABT", "DHR", "TXN", "CSCO", "NEE", "PM", "WFC",
-    "RTX", "UNP", "HON", "INTU", "AMGN", "SPGI", "IBM", "GS", "ISRG", "CAT",
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'AVGO', 'JPM',
+    'LLY', 'UNH', 'V', 'XOM', 'MA', 'JNJ', 'PG', 'COST', 'HD', 'MRK',
+    'ABBV', 'CVX', 'KO', 'PEP', 'BAC', 'WMT', 'ORCL', 'NFLX', 'CRM', 'AMD',
+    'MCD', 'TMO', 'LIN', 'ABT', 'DHR', 'TXN', 'CSCO', 'NEE', 'PM', 'WFC',
+    'RTX', 'UNP', 'HON', 'INTU', 'AMGN', 'SPGI', 'IBM', 'GS', 'ISRG', 'CAT'
 ]
 
 
 @st.cache_data(ttl=3600)
-def get_sp500_tickers() -> pd.DataFrame:
-    """Fetch S&P 500 tickers from Wikipedia; fallback to top-50 list."""
+def get_sp500_tickers():
+    """Fetch S&P 500 tickers from Wikipedia, fallback to top 50."""
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        tables = pd.read_html(url, attrs={"id": "constituents"})
+        tables = pd.read_html(url)
         df = tables[0]
-        df = df.rename(
-            columns={
-                "Symbol": "ticker",
-                "Security": "name",
-                "GICS Sector": "sector",
-                "GICS Sub-Industry": "sub_industry",
-            }
-        )
-        df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
-        return df[["ticker", "name", "sector", "sub_industry"]].reset_index(drop=True)
+        df = df.rename(columns={
+            'Symbol': 'ticker',
+            'Security': 'name',
+            'GICS Sector': 'sector',
+            'GICS Sub-Industry': 'sub_industry'
+        })
+        df['ticker'] = df['ticker'].str.replace('.', '-', regex=False)
+        return df[['ticker', 'name', 'sector', 'sub_industry']].reset_index(drop=True)
     except Exception:
-        return pd.DataFrame(
-            {
-                "ticker": FALLBACK_TICKERS,
-                "name": FALLBACK_TICKERS,
-                "sector": ["Unknown"] * len(FALLBACK_TICKERS),
-                "sub_industry": ["Unknown"] * len(FALLBACK_TICKERS),
-            }
-        )
+        return pd.DataFrame({
+            'ticker': FALLBACK_TICKERS,
+            'name': FALLBACK_TICKERS,
+            'sector': ['Unknown'] * len(FALLBACK_TICKERS),
+            'sub_industry': ['Unknown'] * len(FALLBACK_TICKERS)
+        })
 
-
-# ---------------------------------------------------------------------------
-# Macro data
-# ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=900)
-def get_macro_data() -> dict:
+def get_macro_data():
     """
-    Fetch VIX, SPY, and TNX data and derive regime labels.
-
-    Returns
-    -------
-    dict with keys:
-        vix_current, vix_30d_avg, vix_regime, spy_price,
-        spy_above_50ma, spy_above_200ma, spy_ret_1m, spy_ret_3m,
-        tnx_yield, market_regime, market_bias,
-        vix_hist (Series, 90d), spy_hist (Series, 90d)
+    Fetch macro data: VIX, SPY, TNX with trend analysis.
+    Returns dict with market regime information.
     """
     result = {
-        "vix_current": 20.0,
-        "vix_30d_avg": 20.0,
-        "vix_regime": "normal",
-        "spy_price": 450.0,
-        "spy_above_50ma": True,
-        "spy_above_200ma": True,
-        "spy_ret_1m": 0.0,
-        "spy_ret_3m": 0.0,
-        "tnx_yield": 4.5,
-        "market_regime": "Normal Volatility — Balanced Market",
-        "market_bias": "neutral",
-        "vix_hist": pd.Series(dtype=float),
-        "spy_hist": pd.Series(dtype=float),
+        'vix_current': 20.0,
+        'vix_30d_avg': 20.0,
+        'vix_regime': 'normal',
+        'spy_price': 450.0,
+        'spy_above_50ma': True,
+        'spy_above_200ma': True,
+        'spy_ret_1m': 0.0,
+        'spy_ret_3m': 0.0,
+        'tnx_yield': 4.5,
+        'market_regime': 'Normal Volatility',
+        'market_bias': 'neutral',
+        'vix_history': None,
     }
 
     try:
-        raw = yf.download(
-            ["^VIX", "SPY", "^TNX"],
-            period="1y",
-            auto_adjust=True,
-            progress=False,
-        )
-        close = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+        end = datetime.now()
+        start = end - timedelta(days=200)
 
-        # --- VIX ---
-        if "^VIX" in close.columns:
-            vix = close["^VIX"].dropna()
-            result["vix_current"] = float(vix.iloc[-1])
-            result["vix_30d_avg"] = float(vix.tail(30).mean())
-            result["vix_hist"] = vix.tail(90)
-            v = result["vix_current"]
-            if v < 15:
-                result["vix_regime"] = "low"
-            elif v < 20:
-                result["vix_regime"] = "normal"
-            elif v < 30:
-                result["vix_regime"] = "high"
+        # Download VIX
+        vix_data = yf.download('^VIX', start=start, end=end, progress=False, auto_adjust=True)
+        if not vix_data.empty:
+            vix_close = vix_data['Close'].squeeze()
+            result['vix_current'] = float(vix_close.iloc[-1])
+            result['vix_30d_avg'] = float(vix_close.tail(30).mean())
+            result['vix_history'] = vix_close.tail(90)
+
+            vix_val = result['vix_current']
+            if vix_val < 15:
+                result['vix_regime'] = 'low'
+            elif vix_val < 20:
+                result['vix_regime'] = 'normal'
+            elif vix_val < 30:
+                result['vix_regime'] = 'high'
             else:
-                result["vix_regime"] = "extreme"
+                result['vix_regime'] = 'extreme'
 
-        # --- SPY ---
-        if "SPY" in close.columns:
-            spy = close["SPY"].dropna()
-            result["spy_price"] = float(spy.iloc[-1])
-            result["spy_hist"] = spy.tail(90)
-            result["spy_above_50ma"] = float(spy.iloc[-1]) > float(spy.tail(50).mean())
-            result["spy_above_200ma"] = float(spy.iloc[-1]) > float(spy.tail(200).mean())
-            if len(spy) >= 21:
-                result["spy_ret_1m"] = float((spy.iloc[-1] / spy.iloc[-21] - 1) * 100)
-            if len(spy) >= 63:
-                result["spy_ret_3m"] = float((spy.iloc[-1] / spy.iloc[-63] - 1) * 100)
+        # Download SPY
+        spy_data = yf.download('SPY', start=start, end=end, progress=False, auto_adjust=True)
+        if not spy_data.empty:
+            spy_close = spy_data['Close'].squeeze()
+            result['spy_price'] = float(spy_close.iloc[-1])
 
-        # --- TNX (10yr yield) ---
-        if "^TNX" in close.columns:
-            tnx = close["^TNX"].dropna()
-            result["tnx_yield"] = float(tnx.iloc[-1])
+            ma50 = float(spy_close.tail(50).mean()) if len(spy_close) >= 50 else float(spy_close.mean())
+            ma200 = float(spy_close.tail(200).mean()) if len(spy_close) >= 200 else float(spy_close.mean())
+            result['spy_above_50ma'] = result['spy_price'] > ma50
+            result['spy_above_200ma'] = result['spy_price'] > ma200
 
-    except Exception:
-        pass
+            if len(spy_close) >= 21:
+                result['spy_ret_1m'] = float((spy_close.iloc[-1] / spy_close.iloc[-21] - 1) * 100)
+            if len(spy_close) >= 63:
+                result['spy_ret_3m'] = float((spy_close.iloc[-1] / spy_close.iloc[-63] - 1) * 100)
 
-    # Derive market regime string and bias
-    vr = result["vix_regime"]
-    above50 = result["spy_above_50ma"]
-    above200 = result["spy_above_200ma"]
-    ret1m = result["spy_ret_1m"]
+        # Download TNX (10Y Treasury yield)
+        tnx_data = yf.download('^TNX', start=start, end=end, progress=False, auto_adjust=True)
+        if not tnx_data.empty:
+            tnx_close = tnx_data['Close'].squeeze()
+            result['tnx_yield'] = float(tnx_close.iloc[-1])
 
-    if vr in ("high", "extreme"):
-        if ret1m < -3:
-            result["market_regime"] = "High Fear — Bearish Trend"
-            result["market_bias"] = "bearish"
-        else:
-            result["market_regime"] = "High Volatility — Uncertain Market"
-            result["market_bias"] = "neutral"
-    elif vr == "low":
-        if above50 and above200:
-            result["market_regime"] = "Low Volatility — Strong Bull Market"
-            result["market_bias"] = "bullish"
-        else:
-            result["market_regime"] = "Low Volatility — Weak/Choppy Market"
-            result["market_bias"] = "neutral"
+    except Exception as e:
+        pass  # Return defaults
+
+    # Determine market regime description and bias
+    vix = result['vix_current']
+    spy_bull = result['spy_above_50ma'] and result['spy_above_200ma']
+    spy_ret = result['spy_ret_1m']
+
+    if vix < 15:
+        regime = 'Low Volatility'
+        bias = 'bullish' if spy_bull else 'neutral'
+    elif vix < 20:
+        regime = 'Normal Volatility'
+        bias = 'bullish' if spy_bull and spy_ret > 0 else ('bearish' if spy_ret < -3 else 'neutral')
+    elif vix < 30:
+        regime = 'Elevated Volatility'
+        bias = 'bearish' if not spy_bull else 'neutral'
     else:
-        if above50 and above200 and ret1m > 0:
-            result["market_regime"] = "Normal Volatility — Bullish Trend"
-            result["market_bias"] = "bullish"
-        elif not above50 and ret1m < 0:
-            result["market_regime"] = "Normal Volatility — Bearish Trend"
-            result["market_bias"] = "bearish"
-        else:
-            result["market_regime"] = "Normal Volatility — Balanced Market"
-            result["market_bias"] = "neutral"
+        regime = 'High Fear / Crisis'
+        bias = 'bearish'
 
+    result['market_regime'] = regime
+    result['market_bias'] = bias
     return result
 
 
-# ---------------------------------------------------------------------------
-# Volatility helpers
-# ---------------------------------------------------------------------------
-
 def compute_hv(prices: pd.Series, window: int = 30) -> float:
-    """Compute annualized historical volatility over *window* trading days."""
-    if prices is None or len(prices) < window + 2:
+    """
+    Compute annualized historical volatility over given window.
+    Returns HV as a decimal (e.g., 0.25 = 25%).
+    """
+    if len(prices) < window + 1:
         return np.nan
     log_returns = np.log(prices / prices.shift(1)).dropna()
     if len(log_returns) < window:
         return np.nan
-    hv = float(log_returns.tail(window).std() * np.sqrt(252))
-    return hv if np.isfinite(hv) else np.nan
-
-
-def _days_to_expiry(expiry_str: str) -> int:
-    """Return calendar days from today to expiry date string (YYYY-MM-DD)."""
-    try:
-        exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d")
-        return max(0, (exp_dt - datetime.now()).days)
-    except Exception:
-        return 9999
+    hv = log_returns.tail(window).std() * np.sqrt(252)
+    return float(hv)
 
 
 def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
     """
-    Retrieve ATM implied volatility from the options chain expiry
-    nearest to *target_dte* calendar days.
-
-    Returns float (annualised fraction, e.g. 0.30 for 30 %) or np.nan.
+    Get ATM implied volatility from options chain nearest to target DTE.
+    Averages ATM call and put IV.
+    Returns float (decimal) or np.nan.
     """
     try:
         expirations = ticker_obj.options
         if not expirations:
             return np.nan
 
-        # Pick the expiry whose DTE is closest to target_dte
-        best_exp = min(
-            expirations,
-            key=lambda e: abs(_days_to_expiry(e) - target_dte),
-        )
+        today = datetime.now().date()
+
+        # Find expiry closest to target_dte
+        best_exp = None
+        best_diff = float('inf')
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+                dte = (exp_date - today).days
+                if dte < 7:
+                    continue
+                diff = abs(dte - target_dte)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_exp = exp_str
+            except Exception:
+                continue
+
+        if best_exp is None:
+            return np.nan
 
         chain = ticker_obj.option_chain(best_exp)
         calls = chain.calls
         puts = chain.puts
 
-        # Current price
-        info = ticker_obj.fast_info
-        price = float(getattr(info, "last_price", 0) or 0)
-        if price <= 0:
-            hist = ticker_obj.history(period="2d")
-            if not hist.empty:
-                price = float(hist["Close"].iloc[-1])
-        if price <= 0:
-            return np.nan
-
-        # ATM call: strike closest to current price
         if calls.empty or puts.empty:
             return np.nan
 
-        calls = calls.copy()
-        puts = puts.copy()
-        calls["dist"] = (calls["strike"] - price).abs()
-        puts["dist"] = (puts["strike"] - price).abs()
+        # Get current price
+        hist = ticker_obj.history(period='1d', progress=False)
+        if hist.empty:
+            return np.nan
+        current_price = float(hist['Close'].iloc[-1])
 
-        atm_call_iv = float(calls.loc[calls["dist"].idxmin(), "impliedVolatility"])
-        atm_put_iv = float(puts.loc[puts["dist"].idxmin(), "impliedVolatility"])
+        # Find ATM strike (closest to current price)
+        if 'strike' not in calls.columns:
+            return np.nan
 
-        avg_iv = (atm_call_iv + atm_put_iv) / 2
-        return avg_iv if np.isfinite(avg_iv) and avg_iv > 0 else np.nan
+        strikes = calls['strike'].values
+        atm_idx = np.argmin(np.abs(strikes - current_price))
+        atm_strike = strikes[atm_idx]
+
+        # Get IV for ATM call
+        call_row = calls[calls['strike'] == atm_strike]
+        put_row = puts[puts['strike'] == atm_strike]
+
+        call_iv = np.nan
+        put_iv = np.nan
+
+        if not call_row.empty and 'impliedVolatility' in call_row.columns:
+            call_iv_val = call_row['impliedVolatility'].values[0]
+            if call_iv_val > 0.001:
+                call_iv = float(call_iv_val)
+
+        if not put_row.empty and 'impliedVolatility' in put_row.columns:
+            put_iv_val = put_row['impliedVolatility'].values[0]
+            if put_iv_val > 0.001:
+                put_iv = float(put_iv_val)
+
+        ivs = [v for v in [call_iv, put_iv] if not np.isnan(v)]
+        if ivs:
+            return float(np.mean(ivs))
+        return np.nan
 
     except Exception:
         return np.nan
 
 
-def get_earnings_info(ticker_obj) -> tuple:
+def get_earnings_info(ticker_obj):
     """
-    Return (next_earnings_date_str, days_to_earnings).
-    If unknown, returns (None, 999).
+    Get next earnings date and days until earnings.
+    Returns (next_earnings_date_str, days_to_earnings_int).
     """
     try:
         cal = ticker_obj.calendar
         if cal is None:
-            return None, 999
+            return (None, None)
 
-        # calendar is a dict-like or DataFrame depending on yfinance version
+        # calendar can be a DataFrame or dict depending on yfinance version
         if isinstance(cal, pd.DataFrame):
-            if "Earnings Date" in cal.index:
-                val = cal.loc["Earnings Date"].iloc[0]
-            elif cal.shape[1] > 0:
-                val = cal.iloc[0, 0]
+            if 'Earnings Date' in cal.index:
+                earnings_val = cal.loc['Earnings Date'].values[0]
+            elif 'Earnings Date' in cal.columns:
+                earnings_val = cal['Earnings Date'].iloc[0]
             else:
-                return None, 999
+                return (None, None)
         elif isinstance(cal, dict):
-            val = cal.get("Earnings Date", [None])
-            if isinstance(val, (list, tuple)):
-                val = val[0] if val else None
+            earnings_val = cal.get('Earnings Date', [None])[0] if cal.get('Earnings Date') else None
+            if earnings_val is None:
+                return (None, None)
         else:
-            return None, 999
+            return (None, None)
 
-        if val is None or pd.isna(val):
-            return None, 999
+        if earnings_val is None:
+            return (None, None)
 
-        if isinstance(val, (pd.Timestamp, datetime)):
-            dt = val
+        if hasattr(earnings_val, 'date'):
+            earnings_date = earnings_val.date()
         else:
-            dt = pd.to_datetime(val)
+            earnings_date = pd.to_datetime(earnings_val).date()
 
-        days = max(0, (dt.date() - datetime.now().date()).days)
-        return dt.strftime("%Y-%m-%d"), days
+        today = datetime.now().date()
+        days = (earnings_date - today).days
+
+        if days < 0:
+            return (None, None)
+
+        return (str(earnings_date), int(days))
+
     except Exception:
-        return None, 999
+        return (None, None)
 
 
-# ---------------------------------------------------------------------------
-# Batch fundamentals screening
-# ---------------------------------------------------------------------------
-
-def _safe_get(info: dict, *keys, default=np.nan):
-    for k in keys:
-        v = info.get(k)
-        if v is not None:
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                pass
-    return default
-
-
-def compute_rsi(prices: pd.Series, period: int = 14) -> float:
-    """Compute RSI(14) from a price series."""
-    if prices is None or len(prices) < period + 1:
+def _compute_rsi(prices: pd.Series, period: int = 14) -> float:
+    """Compute RSI for given price series."""
+    if len(prices) < period + 1:
         return np.nan
     delta = prices.diff().dropna()
     gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    avg_gain = gain.rolling(period).mean().iloc[-1]
-    avg_loss = loss.rolling(period).mean().iloc[-1]
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.tail(period).mean()
+    avg_loss = loss.tail(period).mean()
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
-    return float(100 - 100 / (1 + rs))
+    return float(100 - (100 / (1 + rs)))
 
 
+@st.cache_data(ttl=1800)
 def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
     """
-    Download 1-year price history for *tickers*, compute HV30, HV252,
-    momentum (1m, 3m), RSI(14), and fetch fundamentals.
-
-    Returns DataFrame with columns:
-        ticker, price, hv30, hv252, ret_1m, ret_3m, rsi, pe_ratio, market_cap, avg_volume
+    Batch download 1y price history for list of tickers.
+    Compute HV30, HV252, momentum (1m, 3m), RSI(14).
+    Fetch info dict for P/E and market cap.
+    Returns DataFrame with columns: ticker, price, hv30, hv252, ret_1m, ret_3m, rsi, pe_ratio, market_cap
     """
-    records = []
+    results = []
 
-    # ----- Bulk price download -----
     if not tickers:
         return pd.DataFrame()
 
+    # Batch download price data
     try:
         raw = yf.download(
             tickers,
-            period="1y",
+            period='1y',
             auto_adjust=True,
             progress=False,
-            group_by="ticker",
+            group_by='ticker',
+            threads=True
         )
     except Exception:
         raw = pd.DataFrame()
 
-    def _get_close(ticker: str) -> pd.Series:
+    for ticker in tickers:
         try:
-            if isinstance(raw.columns, pd.MultiIndex):
-                return raw[ticker]["Close"].dropna()
-            else:
-                # Single ticker case
-                return raw["Close"].dropna()
-        except Exception:
-            return pd.Series(dtype=float)
+            row = {'ticker': ticker}
 
-    # ----- Per-ticker fundamentals (lightweight info fetch) -----
-    for t in tickers:
-        row: dict = {"ticker": t}
-        try:
-            prices = _get_close(t)
+            # Extract price series
+            close_series = None
+            if not raw.empty:
+                if len(tickers) == 1:
+                    # Single ticker: raw has simple columns
+                    if 'Close' in raw.columns:
+                        close_series = raw['Close'].dropna()
+                elif ticker in raw.columns.get_level_values(0):
+                    close_series = raw[ticker]['Close'].dropna()
+                elif (isinstance(raw.columns, pd.MultiIndex) and
+                      'Close' in raw.columns.get_level_values(0)):
+                    close_series = raw['Close'][ticker].dropna()
 
-            if prices.empty or len(prices) < 10:
+            if close_series is None or len(close_series) < 5:
                 continue
 
-            row["price"] = float(prices.iloc[-1])
-            row["hv30"] = compute_hv(prices, 30)
-            row["hv252"] = compute_hv(prices, 252)
+            row['price'] = float(close_series.iloc[-1])
+            row['hv30'] = compute_hv(close_series, window=30)
+            row['hv252'] = compute_hv(close_series, window=min(252, len(close_series) - 1))
 
-            # Momentum
-            row["ret_1m"] = float((prices.iloc[-1] / prices.iloc[-21] - 1) * 100) if len(prices) >= 21 else np.nan
-            row["ret_3m"] = float((prices.iloc[-1] / prices.iloc[-63] - 1) * 100) if len(prices) >= 63 else np.nan
+            # Returns
+            if len(close_series) >= 21:
+                row['ret_1m'] = float((close_series.iloc[-1] / close_series.iloc[-21] - 1) * 100)
+            else:
+                row['ret_1m'] = np.nan
 
-            # RSI
-            row["rsi"] = compute_rsi(prices, 14)
+            if len(close_series) >= 63:
+                row['ret_3m'] = float((close_series.iloc[-1] / close_series.iloc[-63] - 1) * 100)
+            else:
+                row['ret_3m'] = np.nan
 
-            # Fundamentals via fast_info (lighter than .info)
-            tk = yf.Ticker(t)
+            row['rsi'] = _compute_rsi(close_series)
+
+            # Fundamentals
             try:
-                fi = tk.fast_info
-                row["market_cap"] = float(getattr(fi, "market_cap", None) or np.nan)
-                row["avg_volume"] = float(getattr(fi, "three_month_average_volume", None) or np.nan)
-                # P/E requires full info or ttm EPS
-                info_dict = tk.info or {}
-                row["pe_ratio"] = _safe_get(info_dict, "trailingPE", "forwardPE")
+                t = yf.Ticker(ticker)
+                info = t.info or {}
+                row['pe_ratio'] = info.get('trailingPE', np.nan)
+                row['market_cap'] = info.get('marketCap', np.nan)
+                row['avg_volume'] = info.get('averageVolume', np.nan)
+                row['beta'] = info.get('beta', np.nan)
             except Exception:
-                row["market_cap"] = np.nan
-                row["avg_volume"] = np.nan
-                row["pe_ratio"] = np.nan
+                row['pe_ratio'] = np.nan
+                row['market_cap'] = np.nan
+                row['avg_volume'] = np.nan
+                row['beta'] = np.nan
+
+            results.append(row)
 
         except Exception:
             continue
 
-        records.append(row)
-
-    if not records:
+    if not results:
         return pd.DataFrame()
 
-    df = pd.DataFrame(records)
-    # Ensure all columns present
-    for col in ["price", "hv30", "hv252", "ret_1m", "ret_3m", "rsi", "pe_ratio", "market_cap", "avg_volume"]:
-        if col not in df.columns:
-            df[col] = np.nan
+    df = pd.DataFrame(results)
     return df.reset_index(drop=True)
 
 
-# ---------------------------------------------------------------------------
-# IV enrichment
-# ---------------------------------------------------------------------------
-
 def enrich_with_iv(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     """
-    For each row in *df*, fetch ATM IV and earnings info.
+    For each row in df, fetch ATM IV and earnings info.
     Adds columns: atm_iv, iv_hv_ratio, next_earnings, days_to_earnings.
-    Calls progress_callback(i, total) if provided.
+    Shows progress via callback(i, total).
     """
     atm_ivs = []
     iv_hv_ratios = []
@@ -409,190 +390,183 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     days_to_earnings_list = []
 
     total = len(df)
-    for i, row in enumerate(df.itertuples(), 1):
-        if progress_callback:
-            progress_callback(i, total)
-        try:
-            tk = yf.Ticker(row.ticker)
-            iv = get_atm_iv(tk)
-            ne, dte = get_earnings_info(tk)
 
-            atm_ivs.append(iv)
-            hv = row.hv30 if hasattr(row, "hv30") and not np.isnan(row.hv30) else np.nan
-            iv_hv_ratios.append(iv / hv if (np.isfinite(iv) and np.isfinite(hv) and hv > 0) else np.nan)
-            next_earnings_list.append(ne)
-            days_to_earnings_list.append(dte)
+    for i, row in df.iterrows():
+        ticker_str = row['ticker']
+        try:
+            t = yf.Ticker(ticker_str)
+            iv = get_atm_iv(t, target_dte=30)
+            earnings_date, days = get_earnings_info(t)
         except Exception:
-            atm_ivs.append(np.nan)
+            iv = np.nan
+            earnings_date = None
+            days = None
+
+        atm_ivs.append(iv)
+
+        hv30 = row.get('hv30', np.nan)
+        if not np.isnan(iv) and not np.isnan(hv30) and hv30 > 0:
+            iv_hv_ratios.append(float(iv / hv30))
+        else:
             iv_hv_ratios.append(np.nan)
-            next_earnings_list.append(None)
-            days_to_earnings_list.append(999)
+
+        next_earnings_list.append(earnings_date)
+        days_to_earnings_list.append(days)
+
+        if progress_callback:
+            progress_callback(i + 1, total)
 
     df = df.copy()
-    df["atm_iv"] = atm_ivs
-    df["iv_hv_ratio"] = iv_hv_ratios
-    df["next_earnings"] = next_earnings_list
-    df["days_to_earnings"] = days_to_earnings_list
+    df['atm_iv'] = atm_ivs
+    df['iv_hv_ratio'] = iv_hv_ratios
+    df['next_earnings'] = next_earnings_list
+    df['days_to_earnings'] = days_to_earnings_list
+
     return df
-
-
-# ---------------------------------------------------------------------------
-# Strategy scoring
-# ---------------------------------------------------------------------------
-
-def _iv_hv_label(ratio: float) -> str:
-    if pd.isna(ratio):
-        return "Unknown"
-    if ratio > 1.5:
-        return "Very Expensive"
-    if ratio > 1.2:
-        return "Expensive"
-    if ratio >= 0.8:
-        return "Fair"
-    return "Cheap"
 
 
 def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
     """
-    Add strategy scoring columns to *df*.
-    Returns df with added columns:
-        low_risk_score, high_risk_score, best_strategy, iv_label
+    Add scoring columns for each strategy type.
+    Returns df with added columns: low_risk_score, high_risk_score, best_strategy.
     """
     df = df.copy()
-    low_scores = []
-    high_scores = []
-    best_strats = []
+    low_risk_scores = []
+    high_risk_scores = []
+    best_strategies = []
 
-    vix_regime = macro.get("vix_regime", "normal")
-    market_bias = macro.get("market_bias", "neutral")
+    vix = macro.get('vix_current', 20.0)
+    market_bias = macro.get('market_bias', 'neutral')
 
-    for row in df.itertuples():
-        iv_hv = getattr(row, "iv_hv_ratio", np.nan)
-        if pd.isna(iv_hv):
-            iv_hv = 1.0  # treat as neutral when unknown
+    for _, row in df.iterrows():
+        iv_hv = row.get('iv_hv_ratio', np.nan)
+        days_earn = row.get('days_to_earnings', None)
+        market_cap = row.get('market_cap', np.nan)
+        avg_vol = row.get('avg_volume', np.nan)
+        rsi = row.get('rsi', np.nan)
+        ret_1m = row.get('ret_1m', np.nan)
+        ret_3m = row.get('ret_3m', np.nan)
+        atm_iv = row.get('atm_iv', np.nan)
 
-        dte = getattr(row, "days_to_earnings", 999)
-        if pd.isna(dte):
-            dte = 999
-        dte = int(dte)
+        low_score = 0.0
+        high_score = 0.0
 
-        hv30 = getattr(row, "hv30", np.nan)
-        if pd.isna(hv30):
-            hv30 = 0.25
+        # --- Low risk scoring ---
+        # IV/HV ratio signal
+        if not np.isnan(iv_hv):
+            if iv_hv > 1.5:
+                low_score += 40
+            elif iv_hv > 1.2:
+                low_score += 25
+            elif iv_hv > 1.0:
+                low_score += 10
 
-        ret_1m = getattr(row, "ret_1m", np.nan)
-        if pd.isna(ret_1m):
-            ret_1m = 0.0
+        # VIX contribution
+        if vix > 30:
+            low_score += 20
+        elif vix > 20:
+            low_score += 10
+        elif vix > 15:
+            low_score += 5
 
-        rsi = getattr(row, "rsi", np.nan)
-        if pd.isna(rsi):
-            rsi = 50.0
+        # Earnings far away
+        if days_earn is None:
+            low_score += 10
+        elif days_earn > 45:
+            low_score += 15
+        elif days_earn > 30:
+            low_score += 10
+        elif days_earn < 14:
+            low_score -= 20
 
-        mkt_cap = getattr(row, "market_cap", np.nan)
-        avg_vol = getattr(row, "avg_volume", np.nan)
+        # Liquidity (market cap + volume)
+        if not np.isnan(market_cap) and market_cap > 50e9:
+            low_score += 10
+        if not np.isnan(avg_vol) and avg_vol > 1e6:
+            low_score += 10
 
-        # ---- LOW RISK (premium selling) score ----
-        low = 50.0
+        # Neutral RSI (not overbought/oversold)
+        if not np.isnan(rsi) and 40 <= rsi <= 60:
+            low_score += 5
 
-        # IV/HV signal (primary)
-        if iv_hv > 1.5:
-            low += 30
-        elif iv_hv > 1.2:
-            low += 18
-        elif iv_hv < 0.8:
-            low -= 20
+        # --- High risk scoring ---
+        # IV/HV ratio signal
+        if not np.isnan(iv_hv):
+            if iv_hv < 0.6:
+                high_score += 40
+            elif iv_hv < 0.8:
+                high_score += 25
+            elif iv_hv < 1.0:
+                high_score += 10
 
-        # Earnings proximity (risk factor)
-        if dte < 7:
-            low -= 30
-        elif dte < 14:
-            low -= 15
-        elif dte > 30:
-            low += 10
+        # Near earnings
+        if days_earn is not None:
+            if days_earn < 7:
+                high_score += 35
+            elif days_earn < 14:
+                high_score += 25
+            elif days_earn < 21:
+                high_score += 10
 
-        # VIX regime (high vol = better premium)
-        if vix_regime == "extreme":
-            low += 20
-        elif vix_regime == "high":
-            low += 12
-        elif vix_regime == "low":
-            low -= 8
-
-        # Liquidity bonus
-        if not pd.isna(mkt_cap) and mkt_cap > 1e11:  # >100B
-            low += 8
-        if not pd.isna(avg_vol) and avg_vol > 5e6:
-            low += 5
-
-        # RSI neutral zone preferred
-        if 40 < rsi < 65:
-            low += 5
-
-        low = max(0, min(100, low))
-
-        # ---- HIGH RISK (premium buying) score ----
-        high = 50.0
-
-        # IV/HV signal
-        if iv_hv < 0.8:
-            high += 25
-        elif iv_hv > 1.5:
-            high -= 25
-        elif iv_hv > 1.2:
-            high -= 12
-
-        # Near earnings = good for long straddle / long options
-        if dte < 7:
-            high += 25
-        elif dte < 14:
-            high += 18
-        elif dte < 21:
-            high += 10
-        elif dte > 60:
-            high -= 5
-
-        # Momentum
-        if abs(ret_1m) > 10:
-            high += 15
-        elif abs(ret_1m) > 5:
-            high += 8
+        # Strong momentum
+        if not np.isnan(ret_1m):
+            if ret_1m > 10:
+                high_score += 20
+            elif ret_1m > 5:
+                high_score += 10
+            elif ret_1m < -10:
+                high_score += 15  # Strong downtrend = put opportunity
+            elif ret_1m < -5:
+                high_score += 8
 
         # RSI extremes
-        if rsi > 75 or rsi < 25:
-            high += 10
+        if not np.isnan(rsi):
+            if rsi > 70:
+                high_score += 10
+            elif rsi < 30:
+                high_score += 10
+
+        # VIX low = options cheap
+        if vix < 15:
+            high_score += 15
+        elif vix < 20:
+            high_score += 5
 
         # Market bias
-        if market_bias == "bullish" and ret_1m > 3:
-            high += 5
-        elif market_bias == "bearish" and ret_1m < -3:
-            high += 5
+        if market_bias == 'bullish':
+            low_score += 5
+        elif market_bias == 'bearish':
+            high_score += 5
 
-        high = max(0, min(100, high))
+        # Clamp scores
+        low_score = max(0.0, min(100.0, low_score))
+        high_score = max(0.0, min(100.0, high_score))
 
-        # ---- Best strategy label ----
-        if low >= high:
-            if iv_hv > 1.5:
-                best = "Iron Condor" if rsi > 40 and rsi < 65 else "Covered Call"
-            elif iv_hv > 1.2:
-                best = "Bull Put Spread" if market_bias != "bearish" else "Cash-Secured Put"
+        low_risk_scores.append(round(low_score, 1))
+        high_risk_scores.append(round(high_score, 1))
+
+        # Determine best strategy
+        if low_score >= high_score:
+            if not np.isnan(iv_hv) and iv_hv > 1.5:
+                best = 'Iron Condor'
+            elif not np.isnan(iv_hv) and iv_hv > 1.2:
+                best = 'Bull Put Spread'
             else:
-                best = "Cash-Secured Put"
+                best = 'Covered Call'
         else:
-            if dte < 14:
-                best = "Long Straddle"
-            elif market_bias == "bullish":
-                best = "Bull Call Spread"
-            elif market_bias == "bearish":
-                best = "Long Put"
+            if days_earn is not None and days_earn < 14:
+                best = 'Long Straddle'
+            elif not np.isnan(ret_1m) and ret_1m > 5:
+                best = 'Bull Call Spread'
+            elif not np.isnan(ret_1m) and ret_1m < -5:
+                best = 'Long Put'
             else:
-                best = "Long Call"
+                best = 'Long Call'
 
-        low_scores.append(round(low, 1))
-        high_scores.append(round(high, 1))
-        best_strats.append(best)
+        best_strategies.append(best)
 
-    df["low_risk_score"] = low_scores
-    df["high_risk_score"] = high_scores
-    df["best_strategy"] = best_strats
-    df["iv_label"] = df["iv_hv_ratio"].apply(_iv_hv_label)
+    df['low_risk_score'] = low_risk_scores
+    df['high_risk_score'] = high_risk_scores
+    df['best_strategy'] = best_strategies
+
     return df
