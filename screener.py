@@ -391,6 +391,32 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
 
             row['rsi'] = _compute_rsi(close_series)
 
+            # Moving averages
+            row['ma20'] = float(close_series.rolling(20).mean().iloc[-1]) if len(close_series) >= 20 else np.nan
+            row['ma50'] = float(close_series.rolling(50).mean().iloc[-1]) if len(close_series) >= 50 else np.nan
+            row['ma200'] = float(close_series.rolling(200).mean().iloc[-1]) if len(close_series) >= 200 else np.nan
+
+            # 52-week high/low
+            wk = min(len(close_series), 252)
+            row['wk52_high'] = float(close_series.tail(wk).max())
+            row['wk52_low'] = float(close_series.tail(wk).min())
+
+            # Trend classification based on price vs MAs
+            p = row['price']
+            above = [p > row['ma20'] if not np.isnan(row['ma20']) else None,
+                     p > row['ma50'] if not np.isnan(row['ma50']) else None,
+                     p > row['ma200'] if not np.isnan(row['ma200']) else None]
+            bullish = sum(1 for x in above if x is True)
+            valid = sum(1 for x in above if x is not None)
+            if valid == 0:
+                row['trend'] = 'Unknown'
+            elif bullish == valid:
+                row['trend'] = 'Strong Up' if not np.isnan(row.get('ret_1m', np.nan)) and row.get('ret_1m', 0) > 5 else 'Up'
+            elif bullish == 0:
+                row['trend'] = 'Strong Down' if not np.isnan(row.get('ret_1m', np.nan)) and row.get('ret_1m', 0) < -5 else 'Down'
+            else:
+                row['trend'] = 'Sideways'
+
             # Fundamentals
             try:
                 t = yf.Ticker(ticker)
@@ -428,6 +454,8 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
     next_earnings_list = []
     days_to_earnings_list = []
     atm_deltas, atm_gammas, atm_thetas, atm_vegas = [], [], [], []
+    atm_call_ois = []
+    atm_put_ois = []
 
     total = len(df)
 
@@ -464,6 +492,41 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
         atm_thetas.append(g['theta'])
         atm_vegas.append(g['vega'])
 
+        # Near-ATM Open Interest (liquidity signal)
+        call_oi = np.nan
+        put_oi = np.nan
+        try:
+            price_val = row.get('price', 0)
+            exps = t.options
+            if exps and price_val > 0:
+                today = datetime.now().date()
+                best_exp = None
+                best_diff = float('inf')
+                for exp_str in exps:
+                    try:
+                        exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+                        dte_days = (exp_date - today).days
+                        if dte_days < 7:
+                            continue
+                        diff = abs(dte_days - 30)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_exp = exp_str
+                    except Exception:
+                        continue
+                if best_exp:
+                    ch = t.option_chain(best_exp)
+                    near_calls = ch.calls[abs(ch.calls['strike'] - price_val) / price_val < 0.05]
+                    near_puts = ch.puts[abs(ch.puts['strike'] - price_val) / price_val < 0.05]
+                    if not near_calls.empty and 'openInterest' in near_calls.columns:
+                        call_oi = float(near_calls['openInterest'].mean())
+                    if not near_puts.empty and 'openInterest' in near_puts.columns:
+                        put_oi = float(near_puts['openInterest'].mean())
+        except Exception:
+            pass
+        atm_call_ois.append(call_oi)
+        atm_put_ois.append(put_oi)
+
         if progress_callback:
             progress_callback(i + 1, total)
 
@@ -476,6 +539,8 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
     df['atm_gamma'] = atm_gammas
     df['atm_theta'] = atm_thetas
     df['atm_vega'] = atm_vegas
+    df['atm_call_oi'] = atm_call_ois
+    df['atm_put_oi'] = atm_put_ois
 
     return df
 
@@ -498,8 +563,13 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         days_earn = row.get('days_to_earnings', None)
         rsi = row.get('rsi', np.nan)
         ret_1m = row.get('ret_1m', np.nan)
+        trend = row.get('trend', 'Unknown')
+        atm_delta = row.get('atm_delta', np.nan)
+        atm_theta = row.get('atm_theta', np.nan)  # negative per day per contract
+        call_oi = row.get('atm_call_oi', np.nan)
+        put_oi = row.get('atm_put_oi', np.nan)
 
-        # Shared: low IV = cheap options to buy
+        # --- Shared base: IV cheapness (most important for option buyers) ---
         iv_bonus = 0.0
         if not np.isnan(iv_hv):
             if iv_hv < 0.6:
@@ -516,46 +586,119 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         elif vix < 20:
             vix_bonus = 10
 
-        # Shared: avoid earnings (IV crush risk for option buyers)
+        # Shared: earnings penalty (IV crush risk for option buyers)
         earn_bonus = 0.0
         if days_earn is None or days_earn > 30:
             earn_bonus = 10
         elif days_earn < 14:
             earn_bonus = -15
 
+        # Shared: Delta bonus (want 0.3-0.5 range for good leverage without overpaying)
+        delta_bonus = 0.0
+        if not np.isnan(atm_delta):
+            abs_delta = abs(atm_delta)
+            if 0.35 <= abs_delta <= 0.55:
+                delta_bonus = 10
+            elif 0.25 <= abs_delta < 0.35:
+                delta_bonus = 5
+
+        # Shared: Theta penalty (lower theta decay = less time cost)
+        theta_penalty = 0.0
+        if not np.isnan(atm_theta):
+            # atm_theta is negative (decay per day per contract in $)
+            daily_decay = abs(atm_theta)
+            if daily_decay > 50:
+                theta_penalty = -15
+            elif daily_decay > 25:
+                theta_penalty = -8
+            elif daily_decay < 10:
+                theta_penalty = 5  # very low decay = good
+
         # --- Long Call score ---
-        lc = iv_bonus + vix_bonus + earn_bonus
+        lc = iv_bonus + vix_bonus + earn_bonus + delta_bonus + theta_penalty
+
+        # Trend
+        if trend == 'Strong Up':
+            lc += 20
+        elif trend == 'Up':
+            lc += 12
+        elif trend == 'Sideways':
+            lc += 2
+        elif trend == 'Down':
+            lc -= 5
+        elif trend == 'Strong Down':
+            lc -= 10
+
+        # Momentum
         if not np.isnan(ret_1m):
             if ret_1m > 10:
-                lc += 25
-            elif ret_1m > 5:
                 lc += 15
-            elif ret_1m > 2:
-                lc += 8
-        if not np.isnan(rsi):
-            if 50 <= rsi < 70:
+            elif ret_1m > 5:
                 lc += 10
+            elif ret_1m > 2:
+                lc += 5
+
+        # RSI
+        if not np.isnan(rsi):
+            if 45 <= rsi < 70:
+                lc += 8
             elif rsi >= 70:
-                lc -= 5
+                lc -= 8  # overbought = bad entry for calls
+
+        # Market bias
         if market_bias == 'bullish':
-            lc += 10
+            lc += 8
+
+        # Call OI (liquidity)
+        if not np.isnan(call_oi):
+            if call_oi > 5000:
+                lc += 10
+            elif call_oi > 1000:
+                lc += 5
 
         # --- Long Put score ---
-        lp = iv_bonus + vix_bonus + earn_bonus
+        lp = iv_bonus + vix_bonus + earn_bonus + delta_bonus + theta_penalty
+
+        # Trend
+        if trend == 'Strong Down':
+            lp += 20
+        elif trend == 'Down':
+            lp += 12
+        elif trend == 'Sideways':
+            lp += 2
+        elif trend == 'Up':
+            lp -= 5
+        elif trend == 'Strong Up':
+            lp -= 10
+
+        # Momentum (bearish)
         if not np.isnan(ret_1m):
             if ret_1m < -10:
-                lp += 25
-            elif ret_1m < -5:
                 lp += 15
+            elif ret_1m < -5:
+                lp += 10
             elif ret_1m < -2:
-                lp += 8
+                lp += 5
+
+        # RSI overbought = put entry signal
         if not np.isnan(rsi):
             if rsi > 70:
                 lp += 15
             elif rsi > 60:
                 lp += 5
+            elif rsi < 40:
+                lp -= 5  # already oversold = bad put entry
+
+        # Market bias
         if market_bias == 'bearish':
-            lp += 10
+            lp += 8
+
+        # Put OI (liquidity)
+        if not np.isnan(put_oi):
+            if put_oi > 5000:
+                lp += 10
+            elif put_oi > 1000:
+                lp += 5
 
         lc = max(0.0, min(100.0, lc))
         lp = max(0.0, min(100.0, lp))

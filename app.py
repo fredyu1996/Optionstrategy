@@ -579,6 +579,14 @@ if st.session_state.run_screen:
                 fundamentals_df['iv_hv_ratio'] = np.nan
                 fundamentals_df['next_earnings'] = None
                 fundamentals_df['days_to_earnings'] = None
+                fundamentals_df['atm_delta'] = np.nan
+                fundamentals_df['atm_gamma'] = np.nan
+                fundamentals_df['atm_theta'] = np.nan
+                fundamentals_df['atm_vega'] = np.nan
+                fundamentals_df['atm_call_oi'] = np.nan
+                fundamentals_df['atm_put_oi'] = np.nan
+                if 'trend' not in fundamentals_df.columns:
+                    fundamentals_df['trend'] = 'Unknown'
                 status_text.markdown("**Step 2/3:** Quick mode — skipping IV fetch.")
 
             progress_bar.progress(66)
@@ -645,11 +653,14 @@ if st.session_state.screening_results is not None:
     display_df['IV/HV'] = safe_col(results_df, 'iv_hv_ratio').round(2)
     display_df['RSI'] = safe_col(results_df, 'rsi').round(1)
     display_df['Mom 1M %'] = safe_col(results_df, 'ret_1m').round(1)
+    display_df['Trend'] = safe_col(results_df, 'trend', default='—')
     display_df['Days→Earn'] = safe_col(results_df, 'days_to_earnings', default=None)
     display_df['Δ Delta'] = safe_col(results_df, 'atm_delta').round(3)
     display_df['Γ Gamma'] = safe_col(results_df, 'atm_gamma').round(4)
     display_df['Θ Theta'] = safe_col(results_df, 'atm_theta').round(2)
     display_df['V Vega'] = safe_col(results_df, 'atm_vega').round(2)
+    display_df['Call OI'] = safe_col(results_df, 'atm_call_oi').round(0)
+    display_df['Put OI'] = safe_col(results_df, 'atm_put_oi').round(0)
     display_df['Best'] = safe_col(results_df, 'best_strategy', default='—')
     display_df['LC Score'] = safe_col(results_df, 'lc_score').round(0)
     display_df['LP Score'] = safe_col(results_df, 'lp_score').round(0)
@@ -674,17 +685,95 @@ if st.session_state.screening_results is not None:
             'IV/HV': st.column_config.NumberColumn('IV/HV', format="%.2f"),
             'RSI': st.column_config.NumberColumn('RSI', format="%.0f"),
             'Mom 1M %': st.column_config.NumberColumn('Mom 1M (%)', format="%+.1f%%"),
+            'Trend': st.column_config.TextColumn('Trend'),
             'Days→Earn': st.column_config.NumberColumn('Days→Earn', format="%d"),
             'Δ Delta': st.column_config.NumberColumn('Δ Delta (ATM Call)', format="%.3f", help="ATM call delta at 30 DTE. ~0.5 for ATM options."),
             'Γ Gamma': st.column_config.NumberColumn('Γ Gamma', format="%.4f", help="Rate of delta change per $1 move."),
             'Θ Theta': st.column_config.NumberColumn('Θ Theta ($/day)', format="$%.2f", help="Daily time decay per contract (100 shares)."),
             'V Vega': st.column_config.NumberColumn('V Vega ($/1%IV)', format="$%.2f", help="$ change per 1% IV move per contract."),
+            'Call OI': st.column_config.NumberColumn('Call OI (ATM)', format="%d"),
+            'Put OI': st.column_config.NumberColumn('Put OI (ATM)', format="%d"),
             'Best': st.column_config.TextColumn('Best Strategy'),
             'LC Score': st.column_config.ProgressColumn('Long Call Score', min_value=0, max_value=100, format="%.0f"),
             'LP Score': st.column_config.ProgressColumn('Long Put Score', min_value=0, max_value=100, format="%.0f"),
         },
         hide_index=True,
     )
+
+    # Top 10 Picks
+    st.markdown("---")
+    st.markdown('<div class="section-header">🏆 Top 10 Picks</div>', unsafe_allow_html=True)
+    st.caption("Top 5 Long Call and Top 5 Long Put candidates ranked by composite score (IV, trend, momentum, OI, Greeks).")
+
+    top_lc = results_df.nlargest(5, 'lc_score')
+    top_lp = results_df.nlargest(5, 'lp_score')
+
+    col_lc, col_lp = st.columns(2)
+
+    def _trend_emoji(t):
+        return {'Strong Up': '🚀', 'Up': '📈', 'Sideways': '➡️', 'Down': '📉', 'Strong Down': '🔻'}.get(t, '❓')
+
+    with col_lc:
+        st.markdown("#### 📈 Top 5 Long Call")
+        for _, r in top_lc.iterrows():
+            trend_val = r.get('trend', '—')
+            iv_hv_val = r.get('iv_hv_ratio', np.nan)
+            iv_str = f"{iv_hv_val:.2f}" if not np.isnan(iv_hv_val) else "N/A"
+            delta_val = r.get('atm_delta', np.nan)
+            delta_str = f"{delta_val:.3f}" if not np.isnan(delta_val) else "N/A"
+            theta_val = r.get('atm_theta', np.nan)
+            theta_str = f"${theta_val:.2f}/day" if not np.isnan(theta_val) else "N/A"
+            call_oi_val = r.get('atm_call_oi', np.nan)
+            oi_str = f"{int(call_oi_val):,}" if not np.isnan(call_oi_val) else "N/A"
+            ret_val = r.get('ret_1m', np.nan)
+            ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
+            score = r.get('lc_score', 0)
+            price_val = r.get('price', 0)
+            with st.container():
+                st.markdown(f"""
+<div style="background:#1e293b;border:1px solid #334155;border-left:4px solid #10b981;border-radius:0.5rem;padding:0.75rem 1rem;margin-bottom:0.5rem;">
+<div style="display:flex;justify-content:space-between;align-items:center;">
+  <span style="font-size:1.1rem;font-weight:700;color:#e2e8f0;">{r['ticker']}</span>
+  <span style="font-size:0.85rem;font-weight:700;color:#10b981;">Score: {score:.0f}</span>
+</div>
+<div style="font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;">
+  ${price_val:.2f} &nbsp;|&nbsp; {_trend_emoji(trend_val)} {trend_val} &nbsp;|&nbsp; 1M: {ret_str}
+</div>
+<div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
+  IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
+</div>
+</div>""", unsafe_allow_html=True)
+
+    with col_lp:
+        st.markdown("#### 📉 Top 5 Long Put")
+        for _, r in top_lp.iterrows():
+            trend_val = r.get('trend', '—')
+            iv_hv_val = r.get('iv_hv_ratio', np.nan)
+            iv_str = f"{iv_hv_val:.2f}" if not np.isnan(iv_hv_val) else "N/A"
+            delta_val = r.get('atm_delta', np.nan)
+            delta_str = f"{delta_val:.3f}" if not np.isnan(delta_val) else "N/A"
+            theta_val = r.get('atm_theta', np.nan)
+            theta_str = f"${theta_val:.2f}/day" if not np.isnan(theta_val) else "N/A"
+            put_oi_val = r.get('atm_put_oi', np.nan)
+            oi_str = f"{int(put_oi_val):,}" if not np.isnan(put_oi_val) else "N/A"
+            ret_val = r.get('ret_1m', np.nan)
+            ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
+            score = r.get('lp_score', 0)
+            price_val = r.get('price', 0)
+            with st.container():
+                st.markdown(f"""
+<div style="background:#1e293b;border:1px solid #334155;border-left:4px solid #ef4444;border-radius:0.5rem;padding:0.75rem 1rem;margin-bottom:0.5rem;">
+<div style="display:flex;justify-content:space-between;align-items:center;">
+  <span style="font-size:1.1rem;font-weight:700;color:#e2e8f0;">{r['ticker']}</span>
+  <span style="font-size:0.85rem;font-weight:700;color:#ef4444;">Score: {score:.0f}</span>
+</div>
+<div style="font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;">
+  ${price_val:.2f} &nbsp;|&nbsp; {_trend_emoji(trend_val)} {trend_val} &nbsp;|&nbsp; 1M: {ret_str}
+</div>
+<div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
+  IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
+</div>
+</div>""", unsafe_allow_html=True)
 
     # Ticker selector for detail view
     st.markdown("---")
