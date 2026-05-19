@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import warnings
+import math
 import streamlit as st
 
 warnings.filterwarnings('ignore')
@@ -148,6 +149,44 @@ def compute_hv(prices: pd.Series, window: int = 30) -> float:
         return np.nan
     hv = log_returns.tail(window).std() * np.sqrt(252)
     return float(hv)
+
+
+def _norm_cdf(x):
+    return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
+
+def _norm_pdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+def compute_greeks(S, K, T, r, sigma, option_type='call'):
+    """
+    Compute Black-Scholes Greeks.
+    S: stock price, K: strike, T: years to expiry, r: risk-free rate, sigma: IV (decimal)
+    Returns dict: delta, gamma, theta (daily $/contract), vega (per 1% IV/contract)
+    """
+    try:
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+            return {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan}
+        sqrt_T = math.sqrt(T)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
+        d2 = d1 - sigma * sqrt_T
+        gamma = _norm_pdf(d1) / (S * sigma * sqrt_T)
+        vega = S * _norm_pdf(d1) * sqrt_T * 100 / 100  # per 1% IV change, per share
+        if option_type == 'call':
+            delta = _norm_cdf(d1)
+            theta = (-(S * _norm_pdf(d1) * sigma) / (2 * sqrt_T)
+                     - r * K * math.exp(-r * T) * _norm_cdf(d2)) / 365
+        else:
+            delta = _norm_cdf(d1) - 1
+            theta = (-(S * _norm_pdf(d1) * sigma) / (2 * sqrt_T)
+                     + r * K * math.exp(-r * T) * _norm_cdf(-d2)) / 365
+        return {
+            'delta': round(delta, 3),
+            'gamma': round(gamma, 4),
+            'theta': round(theta * 100, 3),   # per contract (100 shares), daily
+            'vega': round(vega * 100, 3),      # per contract (100 shares), per 1% IV
+        }
+    except Exception:
+        return {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan}
 
 
 def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
@@ -378,16 +417,17 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def enrich_with_iv(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
+def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: float = 0.045) -> pd.DataFrame:
     """
-    For each row in df, fetch ATM IV and earnings info.
-    Adds columns: atm_iv, iv_hv_ratio, next_earnings, days_to_earnings.
-    Shows progress via callback(i, total).
+    For each row in df, fetch ATM IV, earnings info, and compute ATM Greeks.
+    Adds columns: atm_iv, iv_hv_ratio, next_earnings, days_to_earnings,
+                  atm_delta, atm_gamma, atm_theta, atm_vega.
     """
     atm_ivs = []
     iv_hv_ratios = []
     next_earnings_list = []
     days_to_earnings_list = []
+    atm_deltas, atm_gammas, atm_thetas, atm_vegas = [], [], [], []
 
     total = len(df)
 
@@ -413,6 +453,17 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
         next_earnings_list.append(earnings_date)
         days_to_earnings_list.append(days)
 
+        # Compute ATM Greeks for 30 DTE call (representative for screening)
+        price = row.get('price', np.nan)
+        if not np.isnan(iv) and not np.isnan(price) and price > 0:
+            g = compute_greeks(price, price, 30 / 365, risk_free_rate, iv, 'call')
+        else:
+            g = {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan}
+        atm_deltas.append(g['delta'])
+        atm_gammas.append(g['gamma'])
+        atm_thetas.append(g['theta'])
+        atm_vegas.append(g['vega'])
+
         if progress_callback:
             progress_callback(i + 1, total)
 
@@ -421,6 +472,10 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     df['iv_hv_ratio'] = iv_hv_ratios
     df['next_earnings'] = next_earnings_list
     df['days_to_earnings'] = days_to_earnings_list
+    df['atm_delta'] = atm_deltas
+    df['atm_gamma'] = atm_gammas
+    df['atm_theta'] = atm_thetas
+    df['atm_vega'] = atm_vegas
 
     return df
 

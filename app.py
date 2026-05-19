@@ -659,6 +659,10 @@ if st.session_state.screening_results is not None:
     display_df['RSI'] = safe_col(results_df, 'rsi').round(1)
     display_df['Mom 1M %'] = safe_col(results_df, 'ret_1m').round(1)
     display_df['Days→Earn'] = safe_col(results_df, 'days_to_earnings', default=None)
+    display_df['Δ Delta'] = safe_col(results_df, 'atm_delta').round(3)
+    display_df['Γ Gamma'] = safe_col(results_df, 'atm_gamma').round(4)
+    display_df['Θ Theta'] = safe_col(results_df, 'atm_theta').round(2)
+    display_df['V Vega'] = safe_col(results_df, 'atm_vega').round(2)
     display_df['Top Strategy'] = safe_col(results_df, 'best_strategy', default='—')
     display_df['Low Risk Score'] = safe_col(results_df, 'low_risk_score').round(0)
     display_df['High Risk Score'] = safe_col(results_df, 'high_risk_score').round(0)
@@ -684,6 +688,10 @@ if st.session_state.screening_results is not None:
             'RSI': st.column_config.NumberColumn('RSI', format="%.0f"),
             'Mom 1M %': st.column_config.NumberColumn('Mom 1M (%)', format="%+.1f%%"),
             'Days→Earn': st.column_config.NumberColumn('Days→Earn', format="%d"),
+            'Δ Delta': st.column_config.NumberColumn('Δ Delta (ATM Call)', format="%.3f", help="ATM call delta at 30 DTE. ~0.5 for ATM options."),
+            'Γ Gamma': st.column_config.NumberColumn('Γ Gamma', format="%.4f", help="Rate of delta change per $1 move."),
+            'Θ Theta': st.column_config.NumberColumn('Θ Theta ($/day)', format="$%.2f", help="Daily time decay per contract (100 shares)."),
+            'V Vega': st.column_config.NumberColumn('V Vega ($/1%IV)', format="$%.2f", help="$ change per 1% IV move per contract."),
             'Top Strategy': st.column_config.TextColumn('Top Strategy'),
             'Low Risk Score': st.column_config.ProgressColumn('Low Risk Score', min_value=0, max_value=100, format="%.0f"),
             'High Risk Score': st.column_config.ProgressColumn('High Risk Score', min_value=0, max_value=100, format="%.0f"),
@@ -834,7 +842,7 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
                                     st.markdown("**Contract Legs:**")
                                     legs_df = pd.DataFrame(legs)
                                     if not legs_df.empty:
-                                        disp_cols = [c for c in ['action', 'type', 'strike', 'bid', 'ask', 'mid', 'iv', 'volume', 'oi'] if c in legs_df.columns]
+                                        disp_cols = [c for c in ['action', 'type', 'strike', 'bid', 'ask', 'mid', 'iv', 'delta', 'gamma', 'theta', 'vega', 'volume', 'oi'] if c in legs_df.columns]
                                         legs_df_disp = legs_df[disp_cols].copy()
                                         if 'iv' in legs_df_disp.columns:
                                             legs_df_disp['iv'] = (legs_df_disp['iv'] * 100).round(1).astype(str) + '%'

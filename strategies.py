@@ -7,6 +7,7 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import warnings
+from screener import compute_greeks
 
 warnings.filterwarnings('ignore')
 
@@ -533,10 +534,11 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
 
         legs = []
 
+        kw = dict(current_price=current_price, dte=dte)
+
         if strategy == 'Covered Call':
-            # Sell slightly OTM call
             otm_idx = min(atm_call_idx + 1, len(calls) - 1)
-            leg = _extract_leg(calls.iloc[otm_idx], 'call', 'sell')
+            leg = _extract_leg(calls.iloc[otm_idx], 'call', 'sell', **kw)
             legs.append(leg)
             premium = leg['mid']
             result['estimated_premium'] = round(premium * 100, 2)
@@ -546,7 +548,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
 
         elif strategy == 'Cash-Secured Put':
             otm_idx = max(atm_put_idx - 1, 0)
-            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell')
+            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell', **kw)
             legs.append(leg)
             premium = leg['mid']
             strike = leg['strike']
@@ -558,8 +560,8 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
         elif strategy == 'Bull Put Spread':
             sell_idx = max(atm_put_idx - 1, 0)
             buy_idx = max(atm_put_idx - 3, 0)
-            sell_leg = _extract_leg(puts.iloc[sell_idx], 'put', 'sell')
-            buy_leg = _extract_leg(puts.iloc[buy_idx], 'put', 'buy')
+            sell_leg = _extract_leg(puts.iloc[sell_idx], 'put', 'sell', **kw)
+            buy_leg = _extract_leg(puts.iloc[buy_idx], 'put', 'buy', **kw)
             legs = [sell_leg, buy_leg]
             net_credit = sell_leg['mid'] - buy_leg['mid']
             spread_width = sell_leg['strike'] - buy_leg['strike']
@@ -574,10 +576,10 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
             call_sell_idx = min(atm_call_idx + 1, len(calls) - 1)
             call_buy_idx = min(atm_call_idx + 3, len(calls) - 1)
 
-            ps = _extract_leg(puts.iloc[put_sell_idx], 'put', 'sell')
-            pb = _extract_leg(puts.iloc[put_buy_idx], 'put', 'buy')
-            cs = _extract_leg(calls.iloc[call_sell_idx], 'call', 'sell')
-            cb = _extract_leg(calls.iloc[call_buy_idx], 'call', 'buy')
+            ps = _extract_leg(puts.iloc[put_sell_idx], 'put', 'sell', **kw)
+            pb = _extract_leg(puts.iloc[put_buy_idx], 'put', 'buy', **kw)
+            cs = _extract_leg(calls.iloc[call_sell_idx], 'call', 'sell', **kw)
+            cb = _extract_leg(calls.iloc[call_buy_idx], 'call', 'buy', **kw)
             legs = [ps, pb, cs, cb]
 
             net_credit = (ps['mid'] - pb['mid']) + (cs['mid'] - cb['mid'])
@@ -594,7 +596,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
             ]
 
         elif strategy == 'Long Call':
-            leg = _extract_leg(calls.iloc[min(atm_call_idx + 1, len(calls) - 1)], 'call', 'buy')
+            leg = _extract_leg(calls.iloc[min(atm_call_idx + 1, len(calls) - 1)], 'call', 'buy', **kw)
             legs.append(leg)
             premium = leg['mid']
             result['estimated_premium'] = round(premium * 100, 2)
@@ -603,7 +605,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
             result['breakeven'] = [round(leg['strike'] + premium, 2)]
 
         elif strategy == 'Long Put':
-            leg = _extract_leg(puts.iloc[max(atm_put_idx - 1, 0)], 'put', 'buy')
+            leg = _extract_leg(puts.iloc[max(atm_put_idx - 1, 0)], 'put', 'buy', **kw)
             legs.append(leg)
             premium = leg['mid']
             result['estimated_premium'] = round(premium * 100, 2)
@@ -612,19 +614,19 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
             result['breakeven'] = [round(leg['strike'] - premium, 2)]
 
         elif strategy == 'Bull Call Spread':
-            buy_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy')
-            sell_leg = _extract_leg(calls.iloc[min(atm_call_idx + 2, len(calls) - 1)], 'call', 'sell')
+            buy_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy', **kw)
+            sell_leg = _extract_leg(calls.iloc[min(atm_call_idx + 2, len(calls) - 1)], 'call', 'sell', **kw)
             legs = [buy_leg, sell_leg]
             net_debit = buy_leg['mid'] - sell_leg['mid']
             spread_width = sell_leg['strike'] - buy_leg['strike']
-            result['estimated_premium'] = round(-net_debit * 100, 2)  # negative = debit
+            result['estimated_premium'] = round(-net_debit * 100, 2)
             result['max_profit'] = round((spread_width - net_debit) * 100, 2)
             result['max_loss'] = round(net_debit * 100, 2)
             result['breakeven'] = [round(buy_leg['strike'] + net_debit, 2)]
 
         elif strategy == 'Long Straddle':
-            call_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy')
-            put_leg = _extract_leg(puts.iloc[atm_put_idx], 'put', 'buy')
+            call_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy', **kw)
+            put_leg = _extract_leg(puts.iloc[atm_put_idx], 'put', 'buy', **kw)
             legs = [call_leg, put_leg]
             total_premium = call_leg['mid'] + put_leg['mid']
             atm_strike = calls.iloc[atm_call_idx]['strike']
@@ -639,7 +641,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
         else:
             # Wheel Strategy - same as CSP for first leg
             otm_idx = max(atm_put_idx - 1, 0)
-            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell')
+            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell', **kw)
             legs.append(leg)
             result['estimated_premium'] = round(leg['mid'] * 100, 2)
             result['max_profit'] = round(leg['mid'] * 100, 2)
@@ -654,21 +656,32 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
     return result
 
 
-def _extract_leg(row: pd.Series, option_type: str, action: str) -> dict:
-    """Extract relevant fields from an option chain row."""
+def _extract_leg(row: pd.Series, option_type: str, action: str,
+                 current_price: float = None, dte: int = 45,
+                 risk_free_rate: float = 0.045) -> dict:
+    """Extract relevant fields from an option chain row and compute Greeks."""
     bid = float(row.get('bid', 0) or 0)
     ask = float(row.get('ask', 0) or 0)
     mid = round((bid + ask) / 2, 2) if (bid + ask) > 0 else 0.0
+    iv = float(row.get('impliedVolatility', 0) or 0)
+    strike = float(row.get('strike', 0))
+
+    greeks = {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan}
+    if current_price and iv > 0 and dte > 0:
+        greeks = compute_greeks(current_price, strike, dte / 365, risk_free_rate, iv, option_type)
 
     return {
         'type': option_type,
         'action': action,
-        'strike': float(row.get('strike', 0)),
+        'strike': strike,
         'bid': bid,
         'ask': ask,
         'mid': mid,
-        'iv': float(row.get('impliedVolatility', 0) or 0),
-        'delta': float(row.get('delta', np.nan) if 'delta' in row.index else np.nan),
+        'iv': iv,
+        'delta': greeks['delta'],
+        'gamma': greeks['gamma'],
+        'theta': greeks['theta'],
+        'vega': greeks['vega'],
         'volume': int(row.get('volume', 0) or 0),
         'oi': int(row.get('openInterest', 0) or 0),
         'last': float(row.get('lastPrice', 0) or 0),
