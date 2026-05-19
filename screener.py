@@ -229,7 +229,7 @@ def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
             return np.nan
 
         # Get current price
-        hist = ticker_obj.history(period='1d', progress=False)
+        hist = ticker_obj.history(period='1d')
         if hist.empty:
             return np.nan
         current_price = float(hist['Close'].iloc[-1])

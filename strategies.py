@@ -381,7 +381,7 @@ def get_option_chain_display(ticker_str: str, target_dte: int = 30) -> dict:
             return result
 
         # Get current price
-        hist = t.history(period='1d', progress=False)
+        hist = t.history(period='1d')
         if hist.empty:
             result['error'] = 'Could not fetch price'
             return result
