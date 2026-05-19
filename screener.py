@@ -482,12 +482,12 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
 
 def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
     """
-    Add scoring columns for each strategy type.
-    Returns df with added columns: low_risk_score, high_risk_score, best_strategy.
+    Score each stock for Long Call and Long Put suitability.
+    Returns df with added columns: lc_score, lp_score, best_strategy.
     """
     df = df.copy()
-    low_risk_scores = []
-    high_risk_scores = []
+    lc_scores = []
+    lp_scores = []
     best_strategies = []
 
     vix = macro.get('vix_current', 20.0)
@@ -496,132 +496,76 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
     for _, row in df.iterrows():
         iv_hv = row.get('iv_hv_ratio', np.nan)
         days_earn = row.get('days_to_earnings', None)
-        market_cap = row.get('market_cap', np.nan)
-        avg_vol = row.get('avg_volume', np.nan)
         rsi = row.get('rsi', np.nan)
         ret_1m = row.get('ret_1m', np.nan)
-        ret_3m = row.get('ret_3m', np.nan)
-        atm_iv = row.get('atm_iv', np.nan)
 
-        low_score = 0.0
-        high_score = 0.0
-
-        # --- Low risk scoring ---
-        # IV/HV ratio signal
-        if not np.isnan(iv_hv):
-            if iv_hv > 1.5:
-                low_score += 40
-            elif iv_hv > 1.2:
-                low_score += 25
-            elif iv_hv > 1.0:
-                low_score += 10
-
-        # VIX contribution
-        if vix > 30:
-            low_score += 20
-        elif vix > 20:
-            low_score += 10
-        elif vix > 15:
-            low_score += 5
-
-        # Earnings far away
-        if days_earn is None:
-            low_score += 10
-        elif days_earn > 45:
-            low_score += 15
-        elif days_earn > 30:
-            low_score += 10
-        elif days_earn < 14:
-            low_score -= 20
-
-        # Liquidity (market cap + volume)
-        if not np.isnan(market_cap) and market_cap > 50e9:
-            low_score += 10
-        if not np.isnan(avg_vol) and avg_vol > 1e6:
-            low_score += 10
-
-        # Neutral RSI (not overbought/oversold)
-        if not np.isnan(rsi) and 40 <= rsi <= 60:
-            low_score += 5
-
-        # --- High risk scoring ---
-        # IV/HV ratio signal
+        # Shared: low IV = cheap options to buy
+        iv_bonus = 0.0
         if not np.isnan(iv_hv):
             if iv_hv < 0.6:
-                high_score += 40
+                iv_bonus = 35
             elif iv_hv < 0.8:
-                high_score += 25
+                iv_bonus = 25
             elif iv_hv < 1.0:
-                high_score += 10
+                iv_bonus = 10
 
-        # Near earnings
-        if days_earn is not None:
-            if days_earn < 7:
-                high_score += 35
-            elif days_earn < 14:
-                high_score += 25
-            elif days_earn < 21:
-                high_score += 10
+        # Shared: VIX low = options cheap
+        vix_bonus = 0.0
+        if vix < 15:
+            vix_bonus = 20
+        elif vix < 20:
+            vix_bonus = 10
 
-        # Strong momentum
+        # Shared: avoid earnings (IV crush risk for option buyers)
+        earn_bonus = 0.0
+        if days_earn is None or days_earn > 30:
+            earn_bonus = 10
+        elif days_earn < 14:
+            earn_bonus = -15
+
+        # --- Long Call score ---
+        lc = iv_bonus + vix_bonus + earn_bonus
         if not np.isnan(ret_1m):
             if ret_1m > 10:
-                high_score += 20
+                lc += 25
             elif ret_1m > 5:
-                high_score += 10
-            elif ret_1m < -10:
-                high_score += 15  # Strong downtrend = put opportunity
-            elif ret_1m < -5:
-                high_score += 8
+                lc += 15
+            elif ret_1m > 2:
+                lc += 8
+        if not np.isnan(rsi):
+            if 50 <= rsi < 70:
+                lc += 10
+            elif rsi >= 70:
+                lc -= 5
+        if market_bias == 'bullish':
+            lc += 10
 
-        # RSI extremes
+        # --- Long Put score ---
+        lp = iv_bonus + vix_bonus + earn_bonus
+        if not np.isnan(ret_1m):
+            if ret_1m < -10:
+                lp += 25
+            elif ret_1m < -5:
+                lp += 15
+            elif ret_1m < -2:
+                lp += 8
         if not np.isnan(rsi):
             if rsi > 70:
-                high_score += 10
-            elif rsi < 30:
-                high_score += 10
+                lp += 15
+            elif rsi > 60:
+                lp += 5
+        if market_bias == 'bearish':
+            lp += 10
 
-        # VIX low = options cheap
-        if vix < 15:
-            high_score += 15
-        elif vix < 20:
-            high_score += 5
+        lc = max(0.0, min(100.0, lc))
+        lp = max(0.0, min(100.0, lp))
 
-        # Market bias
-        if market_bias == 'bullish':
-            low_score += 5
-        elif market_bias == 'bearish':
-            high_score += 5
+        lc_scores.append(round(lc, 1))
+        lp_scores.append(round(lp, 1))
+        best_strategies.append('Long Call' if lc >= lp else 'Long Put')
 
-        # Clamp scores
-        low_score = max(0.0, min(100.0, low_score))
-        high_score = max(0.0, min(100.0, high_score))
-
-        low_risk_scores.append(round(low_score, 1))
-        high_risk_scores.append(round(high_score, 1))
-
-        # Determine best strategy
-        if low_score >= high_score:
-            if not np.isnan(iv_hv) and iv_hv > 1.5:
-                best = 'Iron Condor'
-            elif not np.isnan(iv_hv) and iv_hv > 1.2:
-                best = 'Bull Put Spread'
-            else:
-                best = 'Covered Call'
-        else:
-            if days_earn is not None and days_earn < 14:
-                best = 'Long Straddle'
-            elif not np.isnan(ret_1m) and ret_1m > 5:
-                best = 'Bull Call Spread'
-            elif not np.isnan(ret_1m) and ret_1m < -5:
-                best = 'Long Put'
-            else:
-                best = 'Long Call'
-
-        best_strategies.append(best)
-
-    df['low_risk_score'] = low_risk_scores
-    df['high_risk_score'] = high_risk_scores
+    df['lc_score'] = lc_scores
+    df['lp_score'] = lp_scores
     df['best_strategy'] = best_strategies
 
     return df

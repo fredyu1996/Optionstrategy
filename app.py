@@ -397,12 +397,6 @@ with st.sidebar:
     st.markdown("## ⚙️ Screener Settings")
     st.markdown("---")
 
-    risk_profile = st.selectbox(
-        "Risk Profile",
-        ["All Strategies", "Low Risk (Premium Earning)", "High Risk (High Reward)"],
-        help="Filter suggested strategies by risk appetite"
-    )
-
     # Sector filter
     all_sectors = sorted(sp500_df['sector'].dropna().unique().tolist())
     sector_options = ["All Sectors"] + all_sectors
@@ -422,8 +416,8 @@ with st.sidebar:
 
     iv_filter = st.selectbox(
         "IV Filter",
-        ["All", "High IV only (IV/HV > 1.2)", "Low IV only (IV/HV < 0.8)"],
-        help="Filter by IV/HV ratio signal"
+        ["All", "Low IV only (IV/HV < 0.8)"],
+        help="Low IV = cheap options, better for Long Call / Long Put"
     )
 
     screen_mode = st.radio(
@@ -511,15 +505,15 @@ with col4:
 
 # Market bias banner
 market_bias = macro.get('market_bias', 'neutral')
-if vix_val > 20 or (not np.isnan(vix_val) and macro.get('vix_regime') in ['high', 'extreme']):
-    banner_class = "banner-premium-sell"
-    banner_text = "📈 Market Favors: Premium Selling — High VIX = Expensive Options. Sell premium with iron condors, bull put spreads, CSPs."
-elif vix_val < 15:
+if vix_val < 15:
     banner_class = "banner-premium-buy"
-    banner_text = "💡 Market Favors: Premium Buying — Low VIX = Cheap Options. Good environment for long calls/puts or straddles."
+    banner_text = "💡 Low VIX — Options Are Cheap. Ideal environment for Long Calls and Long Puts."
+elif vix_val > 20:
+    banner_class = "banner-mixed"
+    banner_text = "⚠️ Elevated VIX — Options Are Expensive. Premium paid will be higher; size positions carefully."
 else:
     banner_class = "banner-mixed"
-    banner_text = "⚖️ Market Favors: Mixed / Selective — Normal volatility. Screen individual stocks for IV/HV signals."
+    banner_text = "⚖️ Normal Volatility — Screen individual stocks for low IV/HV ratio to find cheap options."
 
 st.markdown(f'<div class="{banner_class}">{banner_text}</div>', unsafe_allow_html=True)
 
@@ -601,18 +595,11 @@ if st.session_state.run_screen:
                 mask = (filtered_df['days_to_earnings'].isna()) | (filtered_df['days_to_earnings'] > 14)
                 filtered_df = filtered_df[mask]
 
-            if iv_filter == "High IV only (IV/HV > 1.2)":
-                filtered_df = filtered_df[filtered_df['iv_hv_ratio'] > 1.2]
-            elif iv_filter == "Low IV only (IV/HV < 0.8)":
+            if iv_filter == "Low IV only (IV/HV < 0.8)":
                 filtered_df = filtered_df[filtered_df['iv_hv_ratio'] < 0.8]
 
-            if risk_profile == "Low Risk (Premium Earning)":
-                filtered_df = filtered_df.sort_values('low_risk_score', ascending=False)
-            elif risk_profile == "High Risk (High Reward)":
-                filtered_df = filtered_df.sort_values('high_risk_score', ascending=False)
-            else:
-                filtered_df['combined_score'] = filtered_df[['low_risk_score', 'high_risk_score']].max(axis=1)
-                filtered_df = filtered_df.sort_values('combined_score', ascending=False)
+            filtered_df['_top_score'] = filtered_df[['lc_score', 'lp_score']].max(axis=1)
+            filtered_df = filtered_df.sort_values('_top_score', ascending=False).drop(columns=['_top_score'])
 
             st.session_state.screening_results = filtered_df
             progress_bar.empty()
@@ -628,11 +615,11 @@ if st.session_state.screening_results is not None:
     with c1:
         st.metric("Stocks Screened", n_screened)
     with c2:
-        low_risk_top = (results_df['low_risk_score'] >= 60).sum() if 'low_risk_score' in results_df.columns else 0
-        st.metric("Low Risk Picks", int(low_risk_top))
+        lc_top = (results_df['lc_score'] >= 60).sum() if 'lc_score' in results_df.columns else 0
+        st.metric("Long Call Picks", int(lc_top))
     with c3:
-        high_risk_top = (results_df['high_risk_score'] >= 60).sum() if 'high_risk_score' in results_df.columns else 0
-        st.metric("High Risk Picks", int(high_risk_top))
+        lp_top = (results_df['lp_score'] >= 60).sum() if 'lp_score' in results_df.columns else 0
+        st.metric("Long Put Picks", int(lp_top))
     with c4:
         near_earn = results_df['days_to_earnings'].notna().sum() if 'days_to_earnings' in results_df.columns else 0
         st.metric("Near Earnings", int(near_earn))
@@ -663,9 +650,9 @@ if st.session_state.screening_results is not None:
     display_df['Γ Gamma'] = safe_col(results_df, 'atm_gamma').round(4)
     display_df['Θ Theta'] = safe_col(results_df, 'atm_theta').round(2)
     display_df['V Vega'] = safe_col(results_df, 'atm_vega').round(2)
-    display_df['Top Strategy'] = safe_col(results_df, 'best_strategy', default='—')
-    display_df['Low Risk Score'] = safe_col(results_df, 'low_risk_score').round(0)
-    display_df['High Risk Score'] = safe_col(results_df, 'high_risk_score').round(0)
+    display_df['Best'] = safe_col(results_df, 'best_strategy', default='—')
+    display_df['LC Score'] = safe_col(results_df, 'lc_score').round(0)
+    display_df['LP Score'] = safe_col(results_df, 'lp_score').round(0)
 
     # Rename HV/IV columns with % suffix for display
     display_df = display_df.rename(columns={'HV30': 'HV30 %', 'ATM IV': 'ATM IV %'})
@@ -692,9 +679,9 @@ if st.session_state.screening_results is not None:
             'Γ Gamma': st.column_config.NumberColumn('Γ Gamma', format="%.4f", help="Rate of delta change per $1 move."),
             'Θ Theta': st.column_config.NumberColumn('Θ Theta ($/day)', format="$%.2f", help="Daily time decay per contract (100 shares)."),
             'V Vega': st.column_config.NumberColumn('V Vega ($/1%IV)', format="$%.2f", help="$ change per 1% IV move per contract."),
-            'Top Strategy': st.column_config.TextColumn('Top Strategy'),
-            'Low Risk Score': st.column_config.ProgressColumn('Low Risk Score', min_value=0, max_value=100, format="%.0f"),
-            'High Risk Score': st.column_config.ProgressColumn('High Risk Score', min_value=0, max_value=100, format="%.0f"),
+            'Best': st.column_config.TextColumn('Best Strategy'),
+            'LC Score': st.column_config.ProgressColumn('Long Call Score', min_value=0, max_value=100, format="%.0f"),
+            'LP Score': st.column_config.ProgressColumn('Long Put Score', min_value=0, max_value=100, format="%.0f"),
         },
         hide_index=True,
     )
@@ -777,15 +764,9 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
             if not strategies:
                 st.info("No strategy recommendations available.")
             else:
-                # Apply risk profile filter for display
-                if risk_profile == "Low Risk (Premium Earning)":
-                    strategies = [s for s in strategies if s['risk_level'] == 'Low']
-                elif risk_profile == "High Risk (High Reward)":
-                    strategies = [s for s in strategies if s['risk_level'] == 'High']
-
                 strategies = sorted(strategies, key=lambda x: -x['score'])
 
-                for strat in strategies[:6]:  # Show top 6
+                for strat in strategies:
                     score = strat['score']
                     risk_lvl = strat['risk_level']
                     card_class = "strategy-card-high" if risk_lvl == 'High' else "strategy-card-low"

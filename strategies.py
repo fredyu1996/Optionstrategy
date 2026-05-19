@@ -13,51 +13,6 @@ warnings.filterwarnings('ignore')
 
 # Strategy definitions with metadata
 STRATEGIES = {
-    'Covered Call': {
-        'risk_level': 'Low',
-        'ideal_conditions': 'High IV, neutral-to-slightly bullish outlook, own or willing to own shares',
-        'max_profit': 'Strike price - cost basis + premium received',
-        'max_loss': 'Cost basis - premium received (stock goes to zero)',
-        'timeframe': '30-45 DTE',
-        'tags': ['premium_selling', 'income', 'stock_ownership'],
-        'description': 'Sell OTM call against long stock position to collect premium',
-    },
-    'Cash-Secured Put': {
-        'risk_level': 'Low',
-        'ideal_conditions': 'High IV, bullish-to-neutral, willing to own stock at lower price',
-        'max_profit': 'Premium received',
-        'max_loss': 'Strike price - premium received (stock goes to zero)',
-        'timeframe': '30-45 DTE',
-        'tags': ['premium_selling', 'income', 'acquisition'],
-        'description': 'Sell OTM put with full cash collateral to potentially acquire stock at discount',
-    },
-    'Bull Put Spread': {
-        'risk_level': 'Low',
-        'ideal_conditions': 'High IV, moderately bullish, defined risk needed',
-        'max_profit': 'Net premium received',
-        'max_loss': 'Width of spread - net premium received',
-        'timeframe': '30-45 DTE',
-        'tags': ['premium_selling', 'defined_risk', 'bullish'],
-        'description': 'Sell OTM put and buy lower-strike put for defined risk credit spread',
-    },
-    'Iron Condor': {
-        'risk_level': 'Low',
-        'ideal_conditions': 'Very high IV, neutral range-bound expectation, low directional bias',
-        'max_profit': 'Net premium received',
-        'max_loss': 'Width of widest spread - net premium received',
-        'timeframe': '30-45 DTE',
-        'tags': ['premium_selling', 'neutral', 'range_bound', 'defined_risk'],
-        'description': 'Combine bull put spread and bear call spread for neutral premium collection',
-    },
-    'Wheel Strategy': {
-        'risk_level': 'Low',
-        'ideal_conditions': 'High IV, long-term bullish, want income from stock holdings',
-        'max_profit': 'Accumulated premium over cycles',
-        'max_loss': 'Cost basis - total premium collected',
-        'timeframe': '30-45 DTE per cycle',
-        'tags': ['premium_selling', 'income', 'systematic', 'stock_ownership'],
-        'description': 'Cycle: Sell CSP → assigned → Sell CC → called away → repeat',
-    },
     'Long Call': {
         'risk_level': 'High',
         'ideal_conditions': 'Low IV, strong bullish conviction, cheap options',
@@ -76,154 +31,32 @@ STRATEGIES = {
         'tags': ['premium_buying', 'bearish', 'hedge'],
         'description': 'Buy OTM put for leveraged downside exposure or portfolio protection',
     },
-    'Bull Call Spread': {
-        'risk_level': 'High',
-        'ideal_conditions': 'Moderately bullish, IV not too high, defined risk/reward',
-        'max_profit': 'Width of spread - net debit paid',
-        'max_loss': 'Net debit paid',
-        'timeframe': '30-60 DTE',
-        'tags': ['premium_buying', 'bullish', 'defined_risk'],
-        'description': 'Buy ATM call and sell OTM call to reduce cost of directional bet',
-    },
-    'Long Straddle': {
-        'risk_level': 'High',
-        'ideal_conditions': 'Low IV, expecting large move (earnings/event), direction uncertain',
-        'max_profit': 'Unlimited (large move in either direction)',
-        'max_loss': 'Total premium paid for both options',
-        'timeframe': 'Expiry around catalyst event',
-        'tags': ['premium_buying', 'volatility', 'earnings', 'event_driven'],
-        'description': 'Buy ATM call and ATM put for earnings/event volatility play',
-    },
 }
 
 
 def get_strategy_score(row: dict, macro: dict) -> dict:
     """
-    Score each strategy type for a given stock row and macro context.
+    Score Long Call and Long Put for a given stock row and macro context.
     Returns dict of {strategy_name: score (0-100)}.
     """
     scores = {}
 
     iv_hv = row.get('iv_hv_ratio', np.nan)
     days_earn = row.get('days_to_earnings', None)
-    atm_iv = row.get('atm_iv', np.nan)
-    hv30 = row.get('hv30', np.nan)
     ret_1m = row.get('ret_1m', np.nan)
-    ret_3m = row.get('ret_3m', np.nan)
     rsi = row.get('rsi', np.nan)
-    market_cap = row.get('market_cap', np.nan)
-    avg_vol = row.get('avg_volume', np.nan)
-    beta = row.get('beta', np.nan)
 
     vix = macro.get('vix_current', 20.0)
     market_bias = macro.get('market_bias', 'neutral')
     vix_regime = macro.get('vix_regime', 'normal')
 
-    # Helper flags
-    iv_expensive = not np.isnan(iv_hv) and iv_hv > 1.2
-    iv_very_expensive = not np.isnan(iv_hv) and iv_hv > 1.5
     iv_cheap = not np.isnan(iv_hv) and iv_hv < 0.8
-    iv_very_cheap = not np.isnan(iv_hv) and iv_hv < 0.6
     near_earnings = days_earn is not None and days_earn < 14
-    earnings_imminent = days_earn is not None and days_earn < 7
-    earnings_far = days_earn is None or days_earn > 30
-    large_cap = not np.isnan(market_cap) and market_cap > 10e9
-    liquid = not np.isnan(avg_vol) and avg_vol > 500000
     bullish_momentum = not np.isnan(ret_1m) and ret_1m > 3
     bearish_momentum = not np.isnan(ret_1m) and ret_1m < -3
     strong_bull = not np.isnan(ret_1m) and ret_1m > 8
     strong_bear = not np.isnan(ret_1m) and ret_1m < -8
     overbought = not np.isnan(rsi) and rsi > 70
-    oversold = not np.isnan(rsi) and rsi < 30
-    spy_bullish = market_bias == 'bullish'
-    spy_bearish = market_bias == 'bearish'
-
-    # --- Covered Call ---
-    cc_score = 0
-    if iv_expensive:
-        cc_score += 35
-    if iv_very_expensive:
-        cc_score += 15
-    if earnings_far:
-        cc_score += 20
-    if large_cap and liquid:
-        cc_score += 15
-    if vix > 20:
-        cc_score += 10
-    if overbought:
-        cc_score += 5
-    if spy_bullish:
-        cc_score += 5
-    scores['Covered Call'] = min(100, cc_score)
-
-    # --- Cash-Secured Put ---
-    csp_score = 0
-    if iv_expensive:
-        csp_score += 35
-    if earnings_far:
-        csp_score += 20
-    if large_cap and liquid:
-        csp_score += 15
-    if spy_bullish or (not spy_bearish):
-        csp_score += 10
-    if vix > 20:
-        csp_score += 10
-    if oversold:
-        csp_score += 10
-    scores['Cash-Secured Put'] = min(100, csp_score)
-
-    # --- Bull Put Spread ---
-    bps_score = 0
-    if iv_expensive:
-        bps_score += 35
-    if earnings_far:
-        bps_score += 15
-    if large_cap:
-        bps_score += 10
-    if spy_bullish:
-        bps_score += 15
-    if bullish_momentum:
-        bps_score += 10
-    if vix > 20:
-        bps_score += 10
-    if not near_earnings:
-        bps_score += 5
-    scores['Bull Put Spread'] = min(100, bps_score)
-
-    # --- Iron Condor ---
-    ic_score = 0
-    if iv_very_expensive:
-        ic_score += 45
-    elif iv_expensive:
-        ic_score += 25
-    if earnings_far:
-        ic_score += 20
-    if large_cap and liquid:
-        ic_score += 15
-    if vix > 25:
-        ic_score += 15
-    # Penalize if strong directional momentum
-    if strong_bull or strong_bear:
-        ic_score -= 15
-    if abs(ret_1m if not np.isnan(ret_1m) else 0) < 5:
-        ic_score += 5  # Neutral momentum is good for IC
-    scores['Iron Condor'] = min(100, max(0, ic_score))
-
-    # --- Wheel Strategy ---
-    wheel_score = 0
-    if iv_expensive:
-        wheel_score += 30
-    if earnings_far:
-        wheel_score += 20
-    if large_cap and liquid:
-        wheel_score += 20
-    if spy_bullish:
-        wheel_score += 10
-    if vix > 20:
-        wheel_score += 10
-    if not np.isnan(beta) and 0.5 <= beta <= 1.5:
-        wheel_score += 10  # Moderate beta ideal for wheel
-    scores['Wheel Strategy'] = min(100, wheel_score)
 
     # --- Long Call ---
     lc_score = 0
@@ -233,12 +66,12 @@ def get_strategy_score(row: dict, macro: dict) -> dict:
         lc_score += 25
     elif bullish_momentum:
         lc_score += 15
-    if spy_bullish:
+    if market_bias == 'bullish':
         lc_score += 15
     if vix_regime == 'low':
         lc_score += 10
     if not near_earnings:
-        lc_score += 10  # Avoid buying right before earnings collapse
+        lc_score += 10
     if not overbought:
         lc_score += 5
     scores['Long Call'] = min(100, lc_score)
@@ -251,45 +84,13 @@ def get_strategy_score(row: dict, macro: dict) -> dict:
         lp_score += 30
     elif bearish_momentum:
         lp_score += 20
-    if spy_bearish:
+    if market_bias == 'bearish':
         lp_score += 15
     if vix_regime == 'low':
         lp_score += 10
     if overbought:
         lp_score += 10
     scores['Long Put'] = min(100, lp_score)
-
-    # --- Bull Call Spread ---
-    bcs_score = 0
-    if bullish_momentum:
-        bcs_score += 25
-    if strong_bull:
-        bcs_score += 15
-    if spy_bullish:
-        bcs_score += 15
-    if not iv_very_expensive:
-        bcs_score += 15  # Spreads work better when IV not too high
-    if not near_earnings:
-        bcs_score += 10
-    if large_cap:
-        bcs_score += 10
-    if not overbought:
-        bcs_score += 10
-    scores['Bull Call Spread'] = min(100, bcs_score)
-
-    # --- Long Straddle ---
-    ls_score = 0
-    if earnings_imminent:
-        ls_score += 50
-    elif near_earnings:
-        ls_score += 30
-    if iv_cheap or iv_very_cheap:
-        ls_score += 30
-    if large_cap and liquid:
-        ls_score += 10
-    if not np.isnan(hv30) and hv30 > 0.40:
-        ls_score += 10  # High mover stock
-    scores['Long Straddle'] = min(100, ls_score)
 
     return scores
 
@@ -402,31 +203,6 @@ def _build_setup_string(strategy: str, ticker: str, price: float,
     iv_str = f"{atm_iv*100:.0f}% IV" if not np.isnan(atm_iv) else "current IV"
 
     setups = {
-        'Covered Call': (
-            f"Own 100 shares of {ticker} at ~${price:.2f}. "
-            f"Sell 1 OTM call (~5% above current price) with {iv_str}. "
-            "Target 30-45 DTE expiry."
-        ),
-        'Cash-Secured Put': (
-            f"Secure ${price*100:.0f} cash. "
-            f"Sell 1 OTM put (~5% below ${price:.2f}) at {iv_str}. "
-            "Target 30-45 DTE, collect premium."
-        ),
-        'Bull Put Spread': (
-            f"Sell put at ~5% below ${price:.2f}, "
-            f"buy put at ~10% below ${price:.2f}. "
-            "Collect net credit. Target 30-45 DTE."
-        ),
-        'Iron Condor': (
-            f"Sell OTM call (~5% above ${price:.2f}) + buy further OTM call. "
-            f"Sell OTM put (~5% below ${price:.2f}) + buy further OTM put. "
-            "Collect net credit from both spreads."
-        ),
-        'Wheel Strategy': (
-            f"Step 1: Sell CSP at target acquisition price below ${price:.2f}. "
-            "If assigned, Step 2: Sell CC at or above cost basis. "
-            "Repeat cycle to accumulate premium."
-        ),
         'Long Call': (
             f"Buy 1 OTM call at ~5% above ${price:.2f} with {iv_str}. "
             "Target 60-90 DTE to allow time for thesis to play out."
@@ -434,15 +210,6 @@ def _build_setup_string(strategy: str, ticker: str, price: float,
         'Long Put': (
             f"Buy 1 OTM put at ~5% below ${price:.2f} with {iv_str}. "
             "Target 60-90 DTE. Size position to 1-2% of portfolio."
-        ),
-        'Bull Call Spread': (
-            f"Buy ATM call at ${price:.2f}, sell OTM call at ~5-10% above. "
-            "Pay net debit for defined risk bullish exposure. Target 30-60 DTE."
-        ),
-        'Long Straddle': (
-            f"Buy 1 ATM call AND 1 ATM put at ~${price:.2f} with {iv_str}. "
-            "Expire around earnings/catalyst date. "
-            "Profit from large move in either direction."
         ),
     }
     return setups.get(strategy, f"Enter {strategy} position on {ticker} at ${price:.2f}.")
@@ -482,14 +249,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
         today = datetime.now().date()
         current_price = stock_data.get('price', 0)
 
-        # Target DTE based on strategy
-        target_dte = 45
-        if strategy in ['Long Call', 'Long Put']:
-            target_dte = 75
-        elif strategy == 'Long Straddle':
-            days_earn = stock_data.get('days_to_earnings')
-            if days_earn and 5 <= days_earn <= 60:
-                target_dte = days_earn + 2
+        target_dte = 75  # Long Call / Long Put: give time for thesis to play out
 
         # Find best expiry
         best_exp = None
@@ -536,66 +296,7 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
 
         kw = dict(current_price=current_price, dte=dte)
 
-        if strategy == 'Covered Call':
-            otm_idx = min(atm_call_idx + 1, len(calls) - 1)
-            leg = _extract_leg(calls.iloc[otm_idx], 'call', 'sell', **kw)
-            legs.append(leg)
-            premium = leg['mid']
-            result['estimated_premium'] = round(premium * 100, 2)
-            result['max_profit'] = round(premium * 100, 2)
-            result['max_loss'] = round((current_price - premium) * 100, 2)
-            result['breakeven'] = [round(current_price - premium, 2)]
-
-        elif strategy == 'Cash-Secured Put':
-            otm_idx = max(atm_put_idx - 1, 0)
-            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell', **kw)
-            legs.append(leg)
-            premium = leg['mid']
-            strike = leg['strike']
-            result['estimated_premium'] = round(premium * 100, 2)
-            result['max_profit'] = round(premium * 100, 2)
-            result['max_loss'] = round((strike - premium) * 100, 2)
-            result['breakeven'] = [round(strike - premium, 2)]
-
-        elif strategy == 'Bull Put Spread':
-            sell_idx = max(atm_put_idx - 1, 0)
-            buy_idx = max(atm_put_idx - 3, 0)
-            sell_leg = _extract_leg(puts.iloc[sell_idx], 'put', 'sell', **kw)
-            buy_leg = _extract_leg(puts.iloc[buy_idx], 'put', 'buy', **kw)
-            legs = [sell_leg, buy_leg]
-            net_credit = sell_leg['mid'] - buy_leg['mid']
-            spread_width = sell_leg['strike'] - buy_leg['strike']
-            result['estimated_premium'] = round(net_credit * 100, 2)
-            result['max_profit'] = round(net_credit * 100, 2)
-            result['max_loss'] = round((spread_width - net_credit) * 100, 2)
-            result['breakeven'] = [round(sell_leg['strike'] - net_credit, 2)]
-
-        elif strategy == 'Iron Condor':
-            put_sell_idx = max(atm_put_idx - 1, 0)
-            put_buy_idx = max(atm_put_idx - 3, 0)
-            call_sell_idx = min(atm_call_idx + 1, len(calls) - 1)
-            call_buy_idx = min(atm_call_idx + 3, len(calls) - 1)
-
-            ps = _extract_leg(puts.iloc[put_sell_idx], 'put', 'sell', **kw)
-            pb = _extract_leg(puts.iloc[put_buy_idx], 'put', 'buy', **kw)
-            cs = _extract_leg(calls.iloc[call_sell_idx], 'call', 'sell', **kw)
-            cb = _extract_leg(calls.iloc[call_buy_idx], 'call', 'buy', **kw)
-            legs = [ps, pb, cs, cb]
-
-            net_credit = (ps['mid'] - pb['mid']) + (cs['mid'] - cb['mid'])
-            put_width = ps['strike'] - pb['strike']
-            call_width = cb['strike'] - cs['strike']
-            max_loss_width = max(put_width, call_width)
-
-            result['estimated_premium'] = round(net_credit * 100, 2)
-            result['max_profit'] = round(net_credit * 100, 2)
-            result['max_loss'] = round((max_loss_width - net_credit) * 100, 2)
-            result['breakeven'] = [
-                round(ps['strike'] - net_credit, 2),
-                round(cs['strike'] + net_credit, 2),
-            ]
-
-        elif strategy == 'Long Call':
+        if strategy == 'Long Call':
             leg = _extract_leg(calls.iloc[min(atm_call_idx + 1, len(calls) - 1)], 'call', 'buy', **kw)
             legs.append(leg)
             premium = leg['mid']
@@ -613,40 +314,9 @@ def get_specific_contracts(ticker_str: str, strategy: str, stock_data: dict) -> 
             result['max_loss'] = round(premium * 100, 2)
             result['breakeven'] = [round(leg['strike'] - premium, 2)]
 
-        elif strategy == 'Bull Call Spread':
-            buy_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy', **kw)
-            sell_leg = _extract_leg(calls.iloc[min(atm_call_idx + 2, len(calls) - 1)], 'call', 'sell', **kw)
-            legs = [buy_leg, sell_leg]
-            net_debit = buy_leg['mid'] - sell_leg['mid']
-            spread_width = sell_leg['strike'] - buy_leg['strike']
-            result['estimated_premium'] = round(-net_debit * 100, 2)
-            result['max_profit'] = round((spread_width - net_debit) * 100, 2)
-            result['max_loss'] = round(net_debit * 100, 2)
-            result['breakeven'] = [round(buy_leg['strike'] + net_debit, 2)]
-
-        elif strategy == 'Long Straddle':
-            call_leg = _extract_leg(calls.iloc[atm_call_idx], 'call', 'buy', **kw)
-            put_leg = _extract_leg(puts.iloc[atm_put_idx], 'put', 'buy', **kw)
-            legs = [call_leg, put_leg]
-            total_premium = call_leg['mid'] + put_leg['mid']
-            atm_strike = calls.iloc[atm_call_idx]['strike']
-            result['estimated_premium'] = round(total_premium * 100, 2)
-            result['max_profit'] = 'Unlimited'
-            result['max_loss'] = round(total_premium * 100, 2)
-            result['breakeven'] = [
-                round(atm_strike - total_premium, 2),
-                round(atm_strike + total_premium, 2),
-            ]
-
         else:
-            # Wheel Strategy - same as CSP for first leg
-            otm_idx = max(atm_put_idx - 1, 0)
-            leg = _extract_leg(puts.iloc[otm_idx], 'put', 'sell', **kw)
-            legs.append(leg)
-            result['estimated_premium'] = round(leg['mid'] * 100, 2)
-            result['max_profit'] = round(leg['mid'] * 100, 2)
-            result['max_loss'] = round((leg['strike'] - leg['mid']) * 100, 2)
-            result['breakeven'] = [round(leg['strike'] - leg['mid'], 2)]
+            result['error'] = f"Unknown strategy: {strategy}"
+            return result
 
         result['legs'] = legs
 
