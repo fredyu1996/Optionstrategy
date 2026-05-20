@@ -22,6 +22,7 @@ from screener import (
     get_strike_recommendation,
 )
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
+from chatbot import render_chat_button
 
 
 @st.cache_data(ttl=3600)
@@ -467,6 +468,10 @@ if 'macro_data' not in st.session_state:
     st.session_state.macro_data = None
 if 'sp500_df' not in st.session_state:
     st.session_state.sp500_df = None
+if 'top_lc_picks' not in st.session_state:
+    st.session_state.top_lc_picks = []
+if 'top_lp_picks' not in st.session_state:
+    st.session_state.top_lp_picks = []
 
 
 # ──────────────────────────────────────────────
@@ -842,6 +847,8 @@ if st.session_state.screening_results is not None:
 
     top_lc = results_df.nlargest(5, 'lc_score')
     top_lp = results_df.nlargest(5, 'lp_score')
+    st.session_state.top_lc_picks = top_lc.to_dict('records')
+    st.session_state.top_lp_picks = top_lp.to_dict('records')
 
     col_lc, col_lp = st.columns(2)
 
@@ -1189,3 +1196,22 @@ st.markdown("""
   Past performance is not indicative of future results.
 </div>
 """, unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────
+# Floating Analyst Chatbot
+# ──────────────────────────────────────────────
+_focused_ticker = st.session_state.get('selected_ticker')
+_focused_row = None
+if _focused_ticker and st.session_state.screening_results is not None:
+    _row_df = st.session_state.screening_results
+    _match = _row_df[_row_df['ticker'] == _focused_ticker]
+    if not _match.empty:
+        _focused_row = _match.iloc[0].to_dict()
+
+render_chat_button({
+    "macro": st.session_state.macro_data or {},
+    "top_lc": st.session_state.top_lc_picks,
+    "top_lp": st.session_state.top_lp_picks,
+    "focused_ticker": _focused_ticker,
+    "focused_row": _focused_row,
+})
