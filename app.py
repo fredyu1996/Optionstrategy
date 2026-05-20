@@ -316,11 +316,13 @@ def _build_rec_html(rec: dict, strategy: str, iv_hv_val: float, max_risk_usd: fl
     aff_color = '#10b981' if rec['affordable'] else '#ef4444'
     aff_label = '✓ Affordable' if rec['affordable'] else f'✗ Over Budget (${max_risk_usd:.0f} max)'
 
+    delta_val = rec['delta']
     gamma_val = rec['gamma']
     theta_val = rec['theta']
     breakeven_val = rec['breakeven']
     cost_val = rec['cost']
 
+    delta_str = f"{delta_val:.3f}" if not (isinstance(delta_val, float) and np.isnan(delta_val)) else 'N/A'
     gamma_str = f"{gamma_val:.4f}" if not (isinstance(gamma_val, float) and np.isnan(gamma_val)) else 'N/A'
     theta_str = f"${theta_val:.2f}/day" if not (isinstance(theta_val, float) and np.isnan(theta_val)) else 'N/A'
     breakeven_str = f"${breakeven_val:.2f}" if not (isinstance(breakeven_val, float) and np.isnan(breakeven_val)) else 'N/A'
@@ -341,7 +343,7 @@ def _build_rec_html(rec: dict, strategy: str, iv_hv_val: float, max_risk_usd: fl
         f'Buy ${rec["strike"]:.0f} {option_type} &nbsp;|&nbsp; {expiry_label} ({dte_str}){flag_html}'
         f'</div>'
         f'<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.1rem;">'
-        f'Δ {rec["delta"]:.3f} &nbsp;|&nbsp; Γ {gamma_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; Breakeven: {breakeven_str}'
+        f'Δ {delta_str} &nbsp;|&nbsp; Γ {gamma_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; Breakeven: {breakeven_str}'
         f'</div>'
         f'<div style="font-size:0.78rem;margin-top:0.1rem;">'
         f'Cost: <strong>{cost_str}/contract</strong> &nbsp;|&nbsp; '
