@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import warnings
+import yfinance as yf
 
 warnings.filterwarnings('ignore')
 
@@ -20,6 +21,18 @@ from screener import (
     score_strategies,
 )
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
+
+
+@st.cache_data(ttl=3600)
+def get_fx_rate() -> float:
+    """Fetch CAD→USD rate from yfinance. Falls back to 0.73."""
+    try:
+        data = yf.download('CADUSD=X', period='1d', progress=False, auto_adjust=True)
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+    except Exception:
+        pass
+    return 0.73
 
 # ──────────────────────────────────────────────
 # Page Configuration
@@ -420,17 +433,53 @@ with st.sidebar:
         help="Low IV = cheap options, better for Long Call / Long Put"
     )
 
-    screen_mode = st.radio(
-        "Screening Mode",
-        ["Quick Screen (HV only, fast)", "Full Screen (with IV from options chain)"],
-        help="Quick mode uses only historical volatility. Full mode fetches live IV from options chains (slower)."
-    )
-
     exclude_earnings = st.checkbox(
         "Exclude Near-Earnings Stocks",
         value=True,
         help="Exclude stocks with earnings within 14 days"
     )
+
+    st.markdown("---")
+    st.markdown("## 💰 My Account")
+
+    fx_rate_default = get_fx_rate()
+    account_cad = st.number_input(
+        "Account Size (CAD)",
+        min_value=100, max_value=100000,
+        value=500, step=50,
+    )
+    fx_rate = st.number_input(
+        "CAD → USD Rate",
+        min_value=0.50, max_value=1.00,
+        value=float(round(fx_rate_default, 4)),
+        step=0.001, format="%.4f",
+    )
+    risk_pct_label = st.selectbox(
+        "Risk per Trade",
+        options=["10%", "20%", "33%"],
+        index=2,
+    )
+    risk_pct = int(risk_pct_label.replace('%', '')) / 100
+
+    budget_usd = account_cad * fx_rate
+    max_risk_usd = budget_usd * risk_pct
+
+    st.markdown(f"""
+<div style="background:#1e293b;border:1px solid #334155;border-radius:0.5rem;padding:0.75rem;margin-top:0.5rem;">
+  <div style="font-size:0.8rem;color:#94a3b8;">Budget (USD): <strong style="color:#e2e8f0;">${budget_usd:.0f}</strong></div>
+  <div style="font-size:0.8rem;color:#94a3b8;">Max Risk/Trade: <strong style="color:#f59e0b;">${max_risk_usd:.0f}</strong></div>
+</div>
+""", unsafe_allow_html=True)
+
+    budget_config = {
+        'account_cad': account_cad,
+        'fx_rate': fx_rate,
+        'budget_usd': budget_usd,
+        'max_risk_usd': max_risk_usd,
+    }
+
+    affordable_only = st.checkbox("Affordable only", value=False,
+        help=f"Hide contracts costing more than ${max_risk_usd:.0f}")
 
     st.markdown("---")
 
@@ -560,34 +609,16 @@ if st.session_state.run_screen:
                 on='ticker', how='left'
             )
 
-            # Step 2: Enrich with IV (Full Screen mode only)
-            is_full_screen = "Full Screen" in screen_mode
+            # Step 2: Enrich with IV
+            status_text.markdown("**Step 2/3:** Fetching implied volatility from options chains…")
+            iv_progress = st.progress(0)
 
-            if is_full_screen:
-                status_text.markdown("**Step 2/3:** Fetching implied volatility from options chains…")
-                iv_progress = st.progress(0)
+            def iv_progress_callback(done, total):
+                iv_progress.progress(int(done / total * 100))
+                status_text.markdown(f"**Step 2/3:** Fetching IV… ({done}/{total})")
 
-                def iv_progress_callback(done, total):
-                    iv_progress.progress(int(done / total * 100))
-                    status_text.markdown(f"**Step 2/3:** Fetching IV… ({done}/{total})")
-
-                fundamentals_df = enrich_with_iv(fundamentals_df, progress_callback=iv_progress_callback)
-                iv_progress.empty()
-            else:
-                # Quick mode: set IV columns to NaN
-                fundamentals_df['atm_iv'] = np.nan
-                fundamentals_df['iv_hv_ratio'] = np.nan
-                fundamentals_df['next_earnings'] = None
-                fundamentals_df['days_to_earnings'] = None
-                fundamentals_df['atm_delta'] = np.nan
-                fundamentals_df['atm_gamma'] = np.nan
-                fundamentals_df['atm_theta'] = np.nan
-                fundamentals_df['atm_vega'] = np.nan
-                fundamentals_df['atm_call_oi'] = np.nan
-                fundamentals_df['atm_put_oi'] = np.nan
-                if 'trend' not in fundamentals_df.columns:
-                    fundamentals_df['trend'] = 'Unknown'
-                status_text.markdown("**Step 2/3:** Quick mode — skipping IV fetch.")
+            fundamentals_df = enrich_with_iv(fundamentals_df, progress_callback=iv_progress_callback)
+            iv_progress.empty()
 
             progress_bar.progress(66)
 
@@ -605,6 +636,10 @@ if st.session_state.run_screen:
 
             if iv_filter == "Low IV only (IV/HV < 0.8)":
                 filtered_df = filtered_df[filtered_df['iv_hv_ratio'] < 0.8]
+
+            if affordable_only and 'atm_mid_price' in filtered_df.columns:
+                cost_series = filtered_df['atm_mid_price'].fillna(0) * 100
+                filtered_df = filtered_df[cost_series <= max_risk_usd]
 
             filtered_df['_top_score'] = filtered_df[['lc_score', 'lp_score']].max(axis=1)
             filtered_df = filtered_df.sort_values('_top_score', ascending=False).drop(columns=['_top_score'])
