@@ -1,3 +1,5 @@
+import math
+
 import streamlit as st
 
 _SMC_LABELS = {
@@ -32,15 +34,19 @@ def _build_system_prompt(context: dict) -> str:
     focused_ticker = context.get("focused_ticker")
     focused_row = context.get("focused_row")
 
+    def _fmt(val, fmt):
+        try:
+            return format(val, fmt) if not math.isnan(float(val)) else "N/A"
+        except (TypeError, ValueError):
+            return "N/A"
+
     def _pick_line(rank, row, score_key):
         ticker = row.get("ticker", "?")
         score = row.get(score_key, 0)
         iv_hv = row.get("iv_hv_ratio", float("nan"))
         trend = row.get("trend", "—")
         delta = row.get("atm_delta", float("nan"))
-        iv_str = f"{iv_hv:.2f}" if iv_hv == iv_hv else "N/A"
-        delta_str = f"{delta:.3f}" if delta == delta else "N/A"
-        return f"{rank}. {ticker} | Score={score:.0f} | IV/HV={iv_str} | Trend={trend} | Δ={delta_str}"
+        return f"{rank}. {ticker} | Score={score:.0f} | IV/HV={_fmt(iv_hv, '.2f')} | Trend={trend} | Δ={_fmt(delta, '.3f')}"
 
     if top_lc:
         lc_summary = "\n".join(_pick_line(i + 1, r, "lc_score") for i, r in enumerate(top_lc))
@@ -61,11 +67,11 @@ def _build_system_prompt(context: dict) -> str:
         delta = focused_row.get("atm_delta", float("nan"))
         theta = focused_row.get("atm_theta", float("nan"))
         vega = focused_row.get("atm_vega", float("nan"))
-        iv_str = f"{iv_hv:.2f}" if iv_hv == iv_hv else "N/A"
-        ret_str = f"{ret_1m:+.1f}" if ret_1m == ret_1m else "N/A"
-        delta_str = f"{delta:.3f}" if delta == delta else "N/A"
-        theta_str = f"{theta:.2f}" if theta == theta else "N/A"
-        vega_str = f"{vega:.2f}" if vega == vega else "N/A"
+        iv_str = _fmt(iv_hv, '.2f')
+        ret_str = _fmt(ret_1m, '+.1f')
+        delta_str = _fmt(delta, '.3f')
+        theta_str = _fmt(theta, '.2f')
+        vega_str = _fmt(vega, '.2f')
         focused_block = (
             f"\nFOCUSED STOCK: {focused_ticker}\n"
             f"- Score: LC={focused_row.get('lc_score', 0):.0f} | LP={focused_row.get('lp_score', 0):.0f}\n"
@@ -125,6 +131,9 @@ def render_chat_button(context: dict) -> None:
                         system=system_prompt,
                         messages=[{"role": "user", "content": question}],
                     )
+                if not message.content:
+                    st.error("Claude API returned an empty response.")
+                    return
                 response = message.content[0].text
                 st.markdown(response)
             except Exception as e:
