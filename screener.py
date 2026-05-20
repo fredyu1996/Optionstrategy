@@ -236,9 +236,11 @@ def compute_smc_signals(ohlcv_df: pd.DataFrame) -> dict:
     swing_highs = []
     swing_lows = []
     for i in range(5, n - 5):
-        if highs[i] == max(highs[i - 5:i + 6]):
+        window_high = highs[i - 5:i + 6]
+        if np.isclose(highs[i], np.max(window_high)):
             swing_highs.append((i, highs[i]))
-        if lows[i] == min(lows[i - 5:i + 6]):
+        window_low = lows[i - 5:i + 6]
+        if np.isclose(lows[i], np.min(window_low)):
             swing_lows.append((i, lows[i]))
 
     # Break of Structure
