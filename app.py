@@ -264,6 +264,31 @@ def risk_badge(risk_level):
     return f'<span class="{cls}">{risk_level}</span>'
 
 
+def build_smc_tags(row: dict) -> str:
+    """Return HTML string of active SMC signal tags for a screener row."""
+    tag_map = {
+        'smc_bos_bullish':     ('Bullish BoS', '#10b981'),
+        'smc_bos_bearish':     ('Bearish BoS', '#ef4444'),
+        'smc_choch_bullish':   ('Bullish CHoCH', '#3b82f6'),
+        'smc_choch_bearish':   ('Bearish CHoCH', '#f97316'),
+        'smc_discount_zone':   ('Discount Zone', '#10b981'),
+        'smc_premium_zone':    ('Premium Zone', '#ef4444'),
+        'smc_near_bullish_ob': ('Near Bull OB', '#10b981'),
+        'smc_near_bearish_ob': ('Near Bear OB', '#ef4444'),
+        'smc_in_bullish_fvg':  ('Bull FVG', '#60a5fa'),
+        'smc_in_bearish_fvg':  ('Bear FVG', '#f87171'),
+    }
+    tags = []
+    for key, (label, color) in tag_map.items():
+        if row.get(key):
+            tags.append(
+                f'<span style="background:{color}22;color:{color};border:1px solid {color}55;'
+                f'padding:1px 7px;border-radius:10px;font-size:0.7rem;font-weight:600;">'
+                f'{label}</span>'
+            )
+    return ' '.join(tags)
+
+
 # ──────────────────────────────────────────────
 # VIX Chart
 # ──────────────────────────────────────────────
@@ -773,6 +798,32 @@ if st.session_state.screening_results is not None:
             ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
             score = r.get('lc_score', 0)
             price_val = r.get('price', 0)
+            cost_val = r.get('atm_mid_price', np.nan)
+            cost_usd = cost_val * 100 if not (isinstance(cost_val, float) and np.isnan(cost_val)) else np.nan
+            is_affordable = not (isinstance(cost_usd, float) and np.isnan(cost_usd)) and cost_usd <= budget_config['max_risk_usd']
+            if not (isinstance(cost_usd, float) and np.isnan(cost_usd)):
+                if is_affordable:
+                    budget_line = (
+                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
+                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
+                        f'<span style="color:#10b981;">✓ Affordable</span> &nbsp;|&nbsp; '
+                        f'Max Loss: <strong>${cost_usd:.0f}</strong> &nbsp;|&nbsp; '
+                        f'2:1 Target: <strong style="color:#10b981;">+${cost_usd*2:.0f}</strong>'
+                        f'</div>'
+                    )
+                else:
+                    budget_line = (
+                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
+                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
+                        f'<span style="color:#ef4444;">✗ Over Budget (${budget_config["max_risk_usd"]:.0f} max)</span>'
+                        f'</div>'
+                    )
+            else:
+                budget_line = ''
+
+            smc_tags = build_smc_tags(r.to_dict())
+            smc_row = f'<div style="margin:0.25rem 0;">{smc_tags}</div>' if smc_tags else ''
+
             with st.container():
                 st.markdown(f"""
 <div style="background:#1e293b;border:1px solid #334155;border-left:4px solid #10b981;border-radius:0.5rem;padding:0.75rem 1rem;margin-bottom:0.5rem;">
@@ -783,9 +834,11 @@ if st.session_state.screening_results is not None:
 <div style="font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;">
   ${price_val:.2f} &nbsp;|&nbsp; {_trend_emoji(trend_val)} {trend_val} &nbsp;|&nbsp; 1M: {ret_str}
 </div>
+{smc_row}
 <div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
   IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
 </div>
+{budget_line}
 </div>""", unsafe_allow_html=True)
 
     with col_lp:
@@ -804,6 +857,32 @@ if st.session_state.screening_results is not None:
             ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
             score = r.get('lp_score', 0)
             price_val = r.get('price', 0)
+            cost_val = r.get('atm_mid_price', np.nan)
+            cost_usd = cost_val * 100 if not (isinstance(cost_val, float) and np.isnan(cost_val)) else np.nan
+            is_affordable = not (isinstance(cost_usd, float) and np.isnan(cost_usd)) and cost_usd <= budget_config['max_risk_usd']
+            if not (isinstance(cost_usd, float) and np.isnan(cost_usd)):
+                if is_affordable:
+                    budget_line = (
+                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
+                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
+                        f'<span style="color:#10b981;">✓ Affordable</span> &nbsp;|&nbsp; '
+                        f'Max Loss: <strong>${cost_usd:.0f}</strong> &nbsp;|&nbsp; '
+                        f'2:1 Target: <strong style="color:#10b981;">+${cost_usd*2:.0f}</strong>'
+                        f'</div>'
+                    )
+                else:
+                    budget_line = (
+                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
+                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
+                        f'<span style="color:#ef4444;">✗ Over Budget (${budget_config["max_risk_usd"]:.0f} max)</span>'
+                        f'</div>'
+                    )
+            else:
+                budget_line = ''
+
+            smc_tags = build_smc_tags(r.to_dict())
+            smc_row = f'<div style="margin:0.25rem 0;">{smc_tags}</div>' if smc_tags else ''
+
             with st.container():
                 st.markdown(f"""
 <div style="background:#1e293b;border:1px solid #334155;border-left:4px solid #ef4444;border-radius:0.5rem;padding:0.75rem 1rem;margin-bottom:0.5rem;">
@@ -814,9 +893,11 @@ if st.session_state.screening_results is not None:
 <div style="font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;">
   ${price_val:.2f} &nbsp;|&nbsp; {_trend_emoji(trend_val)} {trend_val} &nbsp;|&nbsp; 1M: {ret_str}
 </div>
+{smc_row}
 <div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
   IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
 </div>
+{budget_line}
 </div>""", unsafe_allow_html=True)
 
     # Ticker selector for detail view
