@@ -115,26 +115,27 @@ def render_chat_button(context: dict) -> None:
                 st.warning("Enter a question first.")
                 return
 
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            api_key = st.secrets.get("OPENAI_API_KEY", "")
             if not api_key:
-                st.error("ANTHROPIC_API_KEY not set in Streamlit secrets.")
+                st.error("OPENAI_API_KEY not set in Streamlit secrets.")
                 return
 
             try:
-                import anthropic
-                client = anthropic.Anthropic(api_key=api_key)
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key)
                 system_prompt = _build_system_prompt(context)
                 with st.spinner("Analyzing…"):
-                    message = client.messages.create(
-                        model="claude-sonnet-4-6",
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
                         max_tokens=512,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": question}],
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": question},
+                        ],
                     )
-                if not message.content:
-                    st.error("Claude API returned an empty response.")
+                if not response.choices:
+                    st.error("OpenAI returned an empty response.")
                     return
-                response = message.content[0].text
-                st.markdown(response)
+                st.markdown(response.choices[0].message.content)
             except Exception as e:
-                st.error(f"Claude API error: {e}")
+                st.error(f"OpenAI API error: {e}")
