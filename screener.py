@@ -749,81 +749,75 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
 
 def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
     """
-    Score each stock for Long Call and Long Put suitability.
-    Returns df with added columns: lc_score, lp_score, best_strategy.
+    Score each stock for Long Call / Long Put suitability.
+    Returns df with columns: lc_score, lp_score, best_strategy.
     """
     df = df.copy()
-    lc_scores = []
-    lp_scores = []
-    best_strategies = []
+    lc_scores, lp_scores, best_strategies = [], [], []
 
-    vix = macro.get('vix_current', 20.0)
     market_bias = macro.get('market_bias', 'neutral')
 
     for _, row in df.iterrows():
-        iv_hv = row.get('iv_hv_ratio', np.nan)
-        days_earn = row.get('days_to_earnings', None)
-        rsi = row.get('rsi', np.nan)
-        ret_1m = row.get('ret_1m', np.nan)
-        trend = row.get('trend', 'Unknown')
-        atm_delta = row.get('atm_delta', np.nan)
-        atm_theta = row.get('atm_theta', np.nan)  # negative per day per contract
-        call_oi = row.get('atm_call_oi', np.nan)
-        put_oi = row.get('atm_put_oi', np.nan)
+        iv_hv      = row.get('iv_hv_ratio', np.nan)
+        days_earn  = row.get('days_to_earnings', None)
+        rsi        = row.get('rsi', np.nan)
+        ret_1m     = row.get('ret_1m', np.nan)
+        trend      = row.get('trend', 'Unknown')
+        atm_theta  = row.get('atm_theta', np.nan)
+        call_oi    = row.get('atm_call_oi', np.nan)
+        put_oi     = row.get('atm_put_oi', np.nan)
+        spread_pct = row.get('atm_spread_pct', np.nan)
 
-        # --- Shared base: IV cheapness (most important for option buyers) ---
-        iv_bonus = 0.0
-        if not np.isnan(iv_hv):
+        # ── Shared base ───────────────────────────────────────────────────
+        iv_pts = 0.0
+        if not (isinstance(iv_hv, float) and np.isnan(iv_hv)) and iv_hv is not None:
             if iv_hv < 0.6:
-                iv_bonus = 35
+                iv_pts = 25
             elif iv_hv < 0.8:
-                iv_bonus = 25
+                iv_pts = 15
             elif iv_hv < 1.0:
-                iv_bonus = 10
+                iv_pts = 8
 
-        # Shared: VIX low = options cheap
-        vix_bonus = 0.0
-        if vix < 15:
-            vix_bonus = 20
-        elif vix < 20:
-            vix_bonus = 10
-
-        # Shared: earnings penalty (IV crush risk for option buyers)
-        earn_bonus = 0.0
+        earn_pts = 0.0
         if days_earn is None or days_earn > 30:
-            earn_bonus = 10
+            earn_pts = 10
         elif days_earn < 14:
-            earn_bonus = -15
+            earn_pts = -15
 
-        # Shared: Delta bonus (want 0.3-0.5 range for good leverage without overpaying)
-        delta_bonus = 0.0
-        if not np.isnan(atm_delta):
-            abs_delta = abs(atm_delta)
-            if 0.35 <= abs_delta <= 0.55:
-                delta_bonus = 10
-            elif 0.25 <= abs_delta < 0.35:
-                delta_bonus = 5
-
-        # Shared: Theta penalty (lower theta decay = less time cost)
-        theta_penalty = 0.0
-        if not np.isnan(atm_theta):
-            # atm_theta is negative (decay per day per contract in $)
+        theta_pts = 0.0
+        if not (isinstance(atm_theta, float) and np.isnan(atm_theta)) and atm_theta is not None:
             daily_decay = abs(atm_theta)
-            if daily_decay > 50:
-                theta_penalty = -15
+            if daily_decay < 10:
+                theta_pts = 5
+            elif daily_decay > 50:
+                theta_pts = -15
             elif daily_decay > 25:
-                theta_penalty = -8
-            elif daily_decay < 10:
-                theta_penalty = 5  # very low decay = good
+                theta_pts = -8
 
-        # --- Long Call score ---
-        lc = iv_bonus + vix_bonus + earn_bonus + delta_bonus + theta_penalty
+        spread_pts = 0.0
+        if not (isinstance(spread_pct, float) and np.isnan(spread_pct)) and spread_pct is not None:
+            if spread_pct > 0.20:
+                spread_pts = -10
+            elif spread_pct > 0.10:
+                spread_pts = -5
 
-        # Trend
-        if trend == 'Strong Up':
-            lc += 20
-        elif trend == 'Up':
-            lc += 12
+        shared = iv_pts + earn_pts + theta_pts + spread_pts
+
+        # ── Long Call ─────────────────────────────────────────────────────
+        lc = shared
+
+        if trend in ('Up', 'Strong Up'):
+            if not (isinstance(rsi, float) and np.isnan(rsi)) and rsi is not None:
+                if rsi < 45:
+                    lc += 15
+                elif rsi <= 60:
+                    lc += 20
+                elif rsi <= 70:
+                    lc += 10
+                else:
+                    lc -= 5
+            else:
+                lc += 10
         elif trend == 'Sideways':
             lc += 2
         elif trend == 'Down':
@@ -831,41 +825,46 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         elif trend == 'Strong Down':
             lc -= 10
 
-        # Momentum
-        if not np.isnan(ret_1m):
-            if ret_1m > 10:
-                lc += 15
-            elif ret_1m > 5:
-                lc += 10
-            elif ret_1m > 2:
-                lc += 5
-
-        # RSI
-        if not np.isnan(rsi):
-            if 45 <= rsi < 70:
+        if not (isinstance(ret_1m, float) and np.isnan(ret_1m)) and ret_1m is not None:
+            if 2 <= ret_1m <= 8:
                 lc += 8
-            elif rsi >= 70:
-                lc -= 8  # overbought = bad entry for calls
+            elif ret_1m > 10:
+                lc -= 5
 
-        # Market bias
         if market_bias == 'bullish':
-            lc += 8
-
-        # Call OI (liquidity)
-        if not np.isnan(call_oi):
+            lc += 5
+        if not (isinstance(call_oi, float) and np.isnan(call_oi)) and call_oi is not None:
             if call_oi > 5000:
                 lc += 10
             elif call_oi > 1000:
                 lc += 5
 
-        # --- Long Put score ---
-        lp = iv_bonus + vix_bonus + earn_bonus + delta_bonus + theta_penalty
+        if row.get('smc_bos_bullish'):     lc += 15
+        if row.get('smc_bos_bearish'):     lc -= 10
+        if row.get('smc_choch_bullish'):   lc += 5
+        if row.get('smc_choch_bearish'):   lc -= 8
+        if row.get('smc_discount_zone'):   lc += 10
+        if row.get('smc_premium_zone'):    lc -= 5
+        if row.get('smc_near_bullish_ob'): lc += 15
+        if row.get('smc_near_bearish_ob'): lc -= 10
+        if row.get('smc_in_bullish_fvg'):  lc += 10
+        if row.get('smc_in_bearish_fvg'):  lc -= 5
 
-        # Trend
-        if trend == 'Strong Down':
-            lp += 20
-        elif trend == 'Down':
-            lp += 12
+        # ── Long Put ──────────────────────────────────────────────────────
+        lp = shared
+
+        if trend in ('Down', 'Strong Down'):
+            if not (isinstance(rsi, float) and np.isnan(rsi)) and rsi is not None:
+                if rsi > 55:
+                    lp += 15
+                elif rsi >= 45:
+                    lp += 20
+                elif rsi >= 30:
+                    lp += 10
+                else:
+                    lp -= 5
+            else:
+                lp += 10
         elif trend == 'Sideways':
             lp += 2
         elif trend == 'Up':
@@ -873,34 +872,30 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         elif trend == 'Strong Up':
             lp -= 10
 
-        # Momentum (bearish)
-        if not np.isnan(ret_1m):
-            if ret_1m < -10:
-                lp += 15
-            elif ret_1m < -5:
-                lp += 10
-            elif ret_1m < -2:
-                lp += 5
+        if not (isinstance(ret_1m, float) and np.isnan(ret_1m)) and ret_1m is not None:
+            if -8 <= ret_1m <= -2:
+                lp += 8
+            elif ret_1m < -10:
+                lp -= 5
 
-        # RSI overbought = put entry signal
-        if not np.isnan(rsi):
-            if rsi > 70:
-                lp += 15
-            elif rsi > 60:
-                lp += 5
-            elif rsi < 40:
-                lp -= 5  # already oversold = bad put entry
-
-        # Market bias
         if market_bias == 'bearish':
-            lp += 8
-
-        # Put OI (liquidity)
-        if not np.isnan(put_oi):
+            lp += 5
+        if not (isinstance(put_oi, float) and np.isnan(put_oi)) and put_oi is not None:
             if put_oi > 5000:
                 lp += 10
             elif put_oi > 1000:
                 lp += 5
+
+        if row.get('smc_bos_bearish'):     lp += 15
+        if row.get('smc_bos_bullish'):     lp -= 10
+        if row.get('smc_choch_bearish'):   lp += 5
+        if row.get('smc_choch_bullish'):   lp -= 8
+        if row.get('smc_premium_zone'):    lp += 10
+        if row.get('smc_discount_zone'):   lp -= 5
+        if row.get('smc_near_bearish_ob'): lp += 15
+        if row.get('smc_near_bullish_ob'): lp -= 10
+        if row.get('smc_in_bearish_fvg'):  lp += 10
+        if row.get('smc_in_bullish_fvg'):  lp -= 5
 
         lc = max(0.0, min(100.0, lc))
         lp = max(0.0, min(100.0, lp))
@@ -912,5 +907,4 @@ def score_strategies(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
     df['lc_score'] = lc_scores
     df['lp_score'] = lp_scores
     df['best_strategy'] = best_strategies
-
     return df
