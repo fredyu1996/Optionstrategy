@@ -699,6 +699,11 @@ if st.session_state.screening_results is not None:
     display_df['Best'] = safe_col(results_df, 'best_strategy', default='—')
     display_df['LC Score'] = safe_col(results_df, 'lc_score').round(0)
     display_df['LP Score'] = safe_col(results_df, 'lp_score').round(0)
+    cost_usd = safe_col(results_df, 'atm_mid_price') * 100
+    display_df['Cost/Contract'] = cost_usd.round(2)
+    display_df['Affordable'] = cost_usd.apply(
+        lambda c: '✓' if (not (isinstance(c, float) and np.isnan(c)) and c <= max_risk_usd) else ('✗' if not (isinstance(c, float) and np.isnan(c)) else 'N/A')
+    )
 
     # Rename HV/IV columns with % suffix for display
     display_df = display_df.rename(columns={'HV30': 'HV30 %', 'ATM IV': 'ATM IV %'})
@@ -731,6 +736,10 @@ if st.session_state.screening_results is not None:
             'Best': st.column_config.TextColumn('Best Strategy'),
             'LC Score': st.column_config.ProgressColumn('Long Call Score', min_value=0, max_value=100, format="%.0f"),
             'LP Score': st.column_config.ProgressColumn('Long Put Score', min_value=0, max_value=100, format="%.0f"),
+            'Cost/Contract': st.column_config.NumberColumn('Cost/Contract ($)', format="$%.2f",
+                help="Estimated cost per 1 contract (ATM call mid × 100)"),
+            'Affordable': st.column_config.TextColumn('Affordable',
+                help=f"✓ = within ${max_risk_usd:.0f} max risk budget"),
         },
         hide_index=True,
     )
