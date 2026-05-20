@@ -189,6 +189,154 @@ def compute_greeks(S, K, T, r, sigma, option_type='call'):
         return {'delta': np.nan, 'gamma': np.nan, 'theta': np.nan, 'vega': np.nan}
 
 
+def _compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
+    """Compute Average True Range over last `period` candles."""
+    n = len(closes)
+    if n < 2:
+        return float(np.mean(highs - lows)) if len(highs) > 0 else 1.0
+    trs = []
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+    if len(trs) >= period:
+        return float(np.mean(trs[-period:]))
+    return float(np.mean(trs)) if trs else 1.0
+
+
+def _empty_smc() -> dict:
+    """Return all-False SMC signal dict (used when data is insufficient)."""
+    return {k: False for k in [
+        'bos_bullish', 'bos_bearish', 'choch_bullish', 'choch_bearish',
+        'discount_zone', 'premium_zone', 'near_bullish_ob', 'near_bearish_ob',
+        'in_bullish_fvg', 'in_bearish_fvg',
+    ]}
+
+
+def compute_smc_signals(ohlcv_df: pd.DataFrame) -> dict:
+    """
+    Compute SMC signals from OHLCV DataFrame.
+    Requires columns: Open, High, Low, Close. Min 20 rows.
+    Returns dict of bool signals.
+    """
+    if len(ohlcv_df) < 20:
+        return _empty_smc()
+
+    highs = ohlcv_df['High'].values.astype(float)
+    lows = ohlcv_df['Low'].values.astype(float)
+    closes = ohlcv_df['Close'].values.astype(float)
+    opens = ohlcv_df['Open'].values.astype(float)
+    n = len(closes)
+    current_price = closes[-1]
+
+    # Swing highs/lows (5-candle lookback each side)
+    swing_highs = []
+    swing_lows = []
+    for i in range(5, n - 5):
+        if highs[i] == max(highs[i - 5:i + 6]):
+            swing_highs.append((i, highs[i]))
+        if lows[i] == min(lows[i - 5:i + 6]):
+            swing_lows.append((i, lows[i]))
+
+    # Break of Structure
+    # If no swing highs/lows detected (e.g. strong monotone trend), fall back to
+    # comparing current price against the prior-period high/low (excluding last 5 bars).
+    if swing_highs:
+        bos_bullish = bool(current_price > swing_highs[-1][1])
+    else:
+        prior_high = float(np.max(highs[:max(1, n - 5)])) if n > 5 else float(np.max(highs))
+        bos_bullish = bool(current_price > prior_high)
+
+    if swing_lows:
+        bos_bearish = bool(current_price < swing_lows[-1][1])
+    else:
+        prior_low = float(np.min(lows[:max(1, n - 5)])) if n > 5 else float(np.min(lows))
+        bos_bearish = bool(current_price < prior_low)
+
+    # Change of Character
+    choch_bullish = False
+    choch_bearish = False
+    if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+        recent_highs = [x[1] for x in swing_highs[-3:]]
+        recent_lows = [x[1] for x in swing_lows[-3:]]
+        was_uptrend = len(recent_highs) >= 2 and recent_highs[-1] > recent_highs[-2]
+        was_downtrend = len(recent_highs) >= 2 and recent_highs[-1] < recent_highs[-2]
+        if was_uptrend and len(recent_lows) >= 2 and recent_lows[-1] < recent_lows[-2]:
+            choch_bearish = True
+        if was_downtrend and len(recent_lows) >= 2 and recent_lows[-1] > recent_lows[-2]:
+            choch_bullish = True
+
+    # Discount / Premium Zone
+    discount_zone = False
+    premium_zone = False
+    if swing_highs and swing_lows:
+        range_high = swing_highs[-1][1]
+        range_low = swing_lows[-1][1]
+        if range_high > range_low:
+            equilibrium = (range_high + range_low) / 2
+            discount_zone = bool(current_price < equilibrium)
+            premium_zone = bool(current_price > equilibrium)
+
+    # Order Blocks
+    atr = _compute_atr(highs, lows, closes, period=14)
+    near_bullish_ob = False
+    near_bearish_ob = False
+    lookback_start = max(0, n - 50)
+
+    for i in range(lookback_start, n - 3):
+        is_bearish_candle = closes[i] < opens[i]
+        is_bullish_candle = closes[i] > opens[i]
+        ob_high = max(opens[i], closes[i])
+        ob_low = min(opens[i], closes[i])
+
+        if is_bearish_candle and not near_bullish_ob:
+            up_count = sum(1 for j in range(i + 1, min(i + 4, n)) if closes[j] > closes[j - 1])
+            large_up = (i + 1 < n and closes[i + 1] - opens[i + 1] > 1.5 * atr
+                        and closes[i + 1] > opens[i + 1])
+            if up_count >= 3 or large_up:
+                if ob_low * 0.99 <= current_price <= ob_high * 1.01:
+                    near_bullish_ob = True
+
+        if is_bullish_candle and not near_bearish_ob:
+            down_count = sum(1 for j in range(i + 1, min(i + 4, n)) if closes[j] < closes[j - 1])
+            large_down = (i + 1 < n and opens[i + 1] - closes[i + 1] > 1.5 * atr
+                          and closes[i + 1] < opens[i + 1])
+            if down_count >= 3 or large_down:
+                if ob_low * 0.99 <= current_price <= ob_high * 1.01:
+                    near_bearish_ob = True
+
+    # Fair Value Gaps
+    in_bullish_fvg = False
+    in_bearish_fvg = False
+    fvg_start = max(0, n - 20)
+
+    for i in range(fvg_start, n - 2):
+        if lows[i + 2] > highs[i]:
+            fvg_low, fvg_high = highs[i], lows[i + 2]
+            if fvg_low <= current_price <= fvg_high:
+                in_bullish_fvg = True
+        if highs[i + 2] < lows[i]:
+            fvg_low, fvg_high = highs[i + 2], lows[i]
+            if fvg_low <= current_price <= fvg_high:
+                in_bearish_fvg = True
+
+    return {
+        'bos_bullish': bos_bullish,
+        'bos_bearish': bos_bearish,
+        'choch_bullish': choch_bullish,
+        'choch_bearish': choch_bearish,
+        'discount_zone': discount_zone,
+        'premium_zone': premium_zone,
+        'near_bullish_ob': near_bullish_ob,
+        'near_bearish_ob': near_bearish_ob,
+        'in_bullish_fvg': in_bullish_fvg,
+        'in_bearish_fvg': in_bearish_fvg,
+    }
+
+
 def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
     """
     Get ATM implied volatility from options chain nearest to target DTE.
@@ -448,6 +596,22 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
                 row['market_cap'] = np.nan
                 row['avg_volume'] = np.nan
                 row['beta'] = np.nan
+
+            # Compute SMC signals
+            if (len(row.get('high_arr', [])) >= 20 and
+                    len(row.get('low_arr', [])) >= 20 and
+                    len(row.get('open_arr', [])) >= 20):
+                ohlcv_for_smc = pd.DataFrame({
+                    'Open': row['open_arr'],
+                    'High': row['high_arr'],
+                    'Low': row['low_arr'],
+                    'Close': close_series.values,
+                })
+                smc = compute_smc_signals(ohlcv_for_smc)
+            else:
+                smc = _empty_smc()
+
+            row.update({f'smc_{k}': v for k, v in smc.items()})
 
             results.append(row)
 
