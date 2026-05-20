@@ -216,6 +216,70 @@ def _empty_smc() -> dict:
     ]}
 
 
+def _empty_recommendation(max_risk_usd: float) -> dict:
+    return {
+        'strike': None, 'expiry': None, 'dte': None,
+        'delta': np.nan, 'gamma': np.nan, 'theta': np.nan,
+        'cost': np.nan, 'affordable': False, 'breakeven': np.nan,
+        'iv_crush_warning': False, 'delta_target_center': 0.40,
+        'smc_active_count': 0, 'reason': 'No options data available.',
+        'chain_df': pd.DataFrame(), 'flag': 'no_data',
+    }
+
+
+def _compute_delta_range(iv_hv: float, smc_count: int, is_call: bool) -> tuple:
+    """Return (lo, hi, center) for the desired delta range."""
+    if np.isnan(iv_hv) or iv_hv <= 0:
+        lo, hi = 0.35, 0.45
+    elif iv_hv < 0.8:
+        lo, hi = 0.45, 0.55
+    elif iv_hv <= 1.0:
+        lo, hi = 0.35, 0.45
+    else:
+        lo, hi = 0.25, 0.35
+
+    if smc_count >= 3:
+        lo -= 0.05
+        hi -= 0.05
+    elif smc_count <= 1:
+        lo += 0.05
+        hi += 0.05
+
+    lo = max(0.05, lo)
+    hi = min(0.95, hi)
+    center = (lo + hi) / 2
+
+    if not is_call:
+        lo, hi, center = -hi, -lo, -center
+    return lo, hi, center
+
+
+def _select_best_strike(
+    strike_data: list,
+    delta_lo: float,
+    delta_hi: float,
+    delta_center: float,
+    max_risk_usd: float,
+    is_call: bool,
+    stock_price: float,
+) -> tuple:
+    """
+    From list of strike dicts (keys: strike, delta, cost, affordable, gamma, theta),
+    return (chosen_dict, flag). flag: None | 'outside_ideal_range' | 'over_budget'.
+    """
+    in_range = [s for s in strike_data if delta_lo <= s['delta'] <= delta_hi and s['affordable']]
+    if in_range:
+        return min(in_range, key=lambda x: abs(x['delta'] - delta_center)), None
+
+    affordable = [s for s in strike_data if s['affordable']]
+    if affordable:
+        return min(affordable, key=lambda x: abs(x['delta'] - delta_center)), 'outside_ideal_range'
+
+    if not strike_data:
+        return {}, 'over_budget'
+    return min(strike_data, key=lambda x: x['cost']), 'over_budget'
+
+
 def compute_smc_signals(ohlcv_df: pd.DataFrame) -> dict:
     """
     Compute SMC signals from OHLCV DataFrame.

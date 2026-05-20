@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
+import pytest
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from screener import score_strategies, compute_smc_signals, _empty_smc, _compute_atr
+from screener import score_strategies, compute_smc_signals, _empty_smc, _compute_atr, \
+    _compute_delta_range, _select_best_strike, _empty_recommendation
 
 
 def test_batch_screen_fundamentals_stores_ohlcv():
@@ -156,3 +158,85 @@ def test_best_strategy_field_exists():
     result = score_strategies(df, macro)
     assert 'best_strategy' in result.columns
     assert result.iloc[0]['best_strategy'] in ('Long Call', 'Long Put')
+
+
+# ── _compute_delta_range ────────────────────────────────────────────────────
+
+def test_delta_range_cheap_iv_targets_atm():
+    """IV/HV < 0.8 → delta range 0.45–0.55 for calls (before SMC adj)."""
+    lo, hi, center = _compute_delta_range(iv_hv=0.6, smc_count=2, is_call=True)
+    assert lo == pytest.approx(0.45), f"lo={lo}"
+    assert hi == pytest.approx(0.55), f"hi={hi}"
+
+
+def test_delta_range_expensive_iv_targets_otm():
+    """IV/HV > 1.0 → delta range 0.25–0.35 for calls (before SMC adj)."""
+    lo, hi, center = _compute_delta_range(iv_hv=1.2, smc_count=2, is_call=True)
+    assert lo == pytest.approx(0.25), f"lo={lo}"
+    assert hi == pytest.approx(0.35), f"hi={hi}"
+
+
+def test_delta_range_high_smc_shifts_otm():
+    """3+ SMC signals should shift range -0.05 (more OTM)."""
+    lo_low_smc, hi_low_smc, _ = _compute_delta_range(iv_hv=0.9, smc_count=2, is_call=True)
+    lo_high_smc, hi_high_smc, _ = _compute_delta_range(iv_hv=0.9, smc_count=3, is_call=True)
+    assert lo_high_smc < lo_low_smc
+    assert hi_high_smc < hi_low_smc
+
+
+def test_delta_range_put_negated():
+    """For puts, delta range should be negative (mirror of call range)."""
+    lo, hi, center = _compute_delta_range(iv_hv=0.9, smc_count=2, is_call=False)
+    assert lo < 0
+    assert hi < 0
+    assert center < 0
+
+
+# ── _select_best_strike ─────────────────────────────────────────────────────
+
+def _make_strikes(deltas, costs, stock_price=100.0):
+    """Helper to build strike_data list for _select_best_strike tests."""
+    return [
+        {
+            'strike': stock_price * (1 + (d - 0.5) * 0.2),
+            'delta': d,
+            'gamma': 0.04,
+            'theta': -5.0,
+            'cost': c,
+            'affordable': c <= 120.0,
+        }
+        for d, c in zip(deltas, costs)
+    ]
+
+
+def test_select_best_strike_picks_closest_to_center():
+    """Should pick the affordable strike with delta closest to range center."""
+    strikes = _make_strikes(
+        deltas=[0.25, 0.38, 0.45, 0.55, 0.65],
+        costs=[50, 80, 100, 130, 160],
+    )
+    chosen, flag = _select_best_strike(strikes, 0.35, 0.45, 0.40, 120.0, True, 100.0)
+    assert chosen['delta'] == pytest.approx(0.38)
+    assert flag is None
+
+
+def test_select_best_strike_falls_back_outside_range():
+    """No affordable strike in range → pick closest affordable, flag 'outside_ideal_range'."""
+    strikes = _make_strikes(
+        deltas=[0.25, 0.38, 0.45, 0.55, 0.65],
+        costs=[50, 200, 200, 200, 200],
+    )
+    chosen, flag = _select_best_strike(strikes, 0.35, 0.45, 0.40, 120.0, True, 100.0)
+    assert flag == 'outside_ideal_range'
+    assert chosen['affordable'] is True
+
+
+def test_select_best_strike_over_budget_flag():
+    """Nothing affordable → cheapest OTM strike, flag 'over_budget'."""
+    strikes = _make_strikes(
+        deltas=[0.25, 0.38, 0.55],
+        costs=[200, 300, 400],
+    )
+    chosen, flag = _select_best_strike(strikes, 0.35, 0.45, 0.40, 120.0, True, 100.0)
+    assert flag == 'over_budget'
+    assert chosen['cost'] == min(200, 300, 400)
