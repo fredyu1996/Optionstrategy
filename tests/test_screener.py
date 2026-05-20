@@ -240,3 +240,17 @@ def test_select_best_strike_over_budget_flag():
     chosen, flag = _select_best_strike(strikes, 0.35, 0.45, 0.40, 120.0, True, 100.0)
     assert flag == 'over_budget'
     assert chosen['cost'] == min(200, 300, 400)
+
+
+def test_empty_recommendation_has_required_keys():
+    """_empty_recommendation must have all keys callers expect."""
+    rec = _empty_recommendation()
+    required = [
+        'strike', 'expiry', 'dte', 'delta', 'gamma', 'theta',
+        'cost', 'affordable', 'breakeven', 'iv_crush_warning',
+        'delta_target_center', 'smc_active_count', 'reason', 'chain_df', 'flag',
+    ]
+    for key in required:
+        assert key in rec, f"Missing key: {key}"
+    assert rec['strike'] is None
+    assert rec['flag'] == 'no_data'

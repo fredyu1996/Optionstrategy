@@ -216,7 +216,7 @@ def _empty_smc() -> dict:
     ]}
 
 
-def _empty_recommendation(max_risk_usd: float) -> dict:
+def _empty_recommendation() -> dict:
     return {
         'strike': None, 'expiry': None, 'dte': None,
         'delta': np.nan, 'gamma': np.nan, 'theta': np.nan,
@@ -267,6 +267,9 @@ def _select_best_strike(
     From list of strike dicts (keys: strike, delta, cost, affordable, gamma, theta),
     return (chosen_dict, flag). flag: None | 'outside_ideal_range' | 'over_budget'.
     """
+    if not strike_data:
+        return {}, 'over_budget'
+
     in_range = [s for s in strike_data if delta_lo <= s['delta'] <= delta_hi and s['affordable']]
     if in_range:
         return min(in_range, key=lambda x: abs(x['delta'] - delta_center)), None
@@ -275,8 +278,6 @@ def _select_best_strike(
     if affordable:
         return min(affordable, key=lambda x: abs(x['delta'] - delta_center)), 'outside_ideal_range'
 
-    if not strike_data:
-        return {}, 'over_budget'
     return min(strike_data, key=lambda x: x['cost']), 'over_budget'
 
 
