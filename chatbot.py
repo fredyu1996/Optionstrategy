@@ -81,12 +81,20 @@ def _build_system_prompt(context: dict) -> str:
             f"- Best Strategy: {focused_row.get('best_strategy', '—')}\n"
         )
 
+    vix = macro.get('vix_current', 'N/A')
+    vix_regime = macro.get('vix_regime', 'unknown')
+    market_regime = macro.get('market_regime', 'unknown')
+    spy_trend = macro.get('spy_trend', 'unknown')
+    spy_price = macro.get('spy_price', 0.0)
+    spy_ret_1m = macro.get('spy_ret_1m', 0.0)
+    tnx = macro.get('tnx_yield', 0.0)
+
     return (
         "You are a professional options analyst assistant for an S&P 500 options screener.\n\n"
         "MARKET CONTEXT:\n"
-        f"- VIX: {macro['vix_current']} (Regime: {macro['vix_regime']} | {macro['market_regime']})\n"
-        f"- SPY: {macro['spy_trend']} at ${macro['spy_price']:.2f} | 1M return: {macro['spy_ret_1m']:+.1f}%\n"
-        f"- 10Y Rate: {macro['tnx_yield']:.2f}%\n\n"
+        f"- VIX: {vix} (Regime: {vix_regime} | {market_regime})\n"
+        f"- SPY: {spy_trend} at ${spy_price:.2f} | 1M return: {spy_ret_1m:+.1f}%\n"
+        f"- 10Y Rate: {tnx:.2f}%\n\n"
         "TOP LONG CALL PICKS:\n"
         f"{lc_summary}\n\n"
         "TOP LONG PUT PICKS:\n"
