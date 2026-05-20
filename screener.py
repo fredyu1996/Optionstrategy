@@ -361,18 +361,48 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
             # Extract price series
             close_series = None
             if not raw.empty:
-                if len(tickers) == 1:
-                    # Single ticker: raw has simple columns
+                if isinstance(raw.columns, pd.MultiIndex):
+                    # MultiIndex: columns are (ticker, field) or (field, ticker)
+                    level0 = raw.columns.get_level_values(0).unique().tolist()
+                    if ticker in level0:
+                        close_series = raw[ticker]['Close'].dropna()
+                    elif 'Close' in level0:
+                        close_series = raw['Close'][ticker].dropna()
+                else:
+                    # Flat columns (legacy single-ticker without group_by)
                     if 'Close' in raw.columns:
                         close_series = raw['Close'].dropna()
-                elif ticker in raw.columns.get_level_values(0):
-                    close_series = raw[ticker]['Close'].dropna()
-                elif (isinstance(raw.columns, pd.MultiIndex) and
-                      'Close' in raw.columns.get_level_values(0)):
-                    close_series = raw['Close'][ticker].dropna()
 
             if close_series is None or len(close_series) < 5:
                 continue
+
+            # Extract High, Low, Open arrays (needed for SMC signals)
+            high_series = None
+            low_series = None
+            open_series = None
+            if not raw.empty:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    level0 = raw.columns.get_level_values(0).unique().tolist()
+                    if ticker in level0:
+                        high_series = raw[ticker]['High'].dropna()
+                        low_series = raw[ticker]['Low'].dropna()
+                        open_series = raw[ticker]['Open'].dropna()
+                    elif 'High' in level0:
+                        high_series = raw['High'][ticker].dropna()
+                        low_series = raw['Low'][ticker].dropna()
+                        open_series = raw['Open'][ticker].dropna()
+                else:
+                    # Flat columns (legacy single-ticker without group_by)
+                    if 'High' in raw.columns:
+                        high_series = raw['High'].dropna()
+                    if 'Low' in raw.columns:
+                        low_series = raw['Low'].dropna()
+                    if 'Open' in raw.columns:
+                        open_series = raw['Open'].dropna()
+
+            row['high_arr'] = high_series.values if high_series is not None else np.array([])
+            row['low_arr'] = low_series.values if low_series is not None else np.array([])
+            row['open_arr'] = open_series.values if open_series is not None else np.array([])
 
             row['price'] = float(close_series.iloc[-1])
             row['hv30'] = compute_hv(close_series, window=30)
@@ -456,6 +486,8 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
     atm_deltas, atm_gammas, atm_thetas, atm_vegas = [], [], [], []
     atm_call_ois = []
     atm_put_ois = []
+    atm_mid_prices = []
+    atm_spread_pcts = []
 
     total = len(df)
 
@@ -527,6 +559,51 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
         atm_call_ois.append(call_oi)
         atm_put_ois.append(put_oi)
 
+        # Compute ATM mid price and spread %
+        atm_mid = np.nan
+        atm_spread = np.nan
+        try:
+            expirations = t.options
+            if expirations:
+                today = datetime.now().date()
+                best_exp = None
+                best_diff = float('inf')
+                for exp_str in expirations:
+                    try:
+                        exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+                        dte_days = (exp_date - today).days
+                        if dte_days < 7:
+                            continue
+                        diff = abs(dte_days - 30)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_exp = exp_str
+                    except Exception:
+                        continue
+                if best_exp:
+                    chain = t.option_chain(best_exp)
+                    calls = chain.calls
+                    price_val = row.get('price', 0)
+                    if not calls.empty and price_val > 0:
+                        strikes = calls['strike'].values
+                        atm_idx = int(np.argmin(np.abs(strikes - price_val)))
+                        atm_row = calls.iloc[atm_idx]
+                        try:
+                            bid = float(atm_row['bid'])
+                            ask = float(atm_row['ask'])
+                        except Exception:
+                            bid = np.nan
+                            ask = np.nan
+                        if not np.isnan(bid) and not np.isnan(ask) and bid > 0 and ask > 0:
+                            mid = (bid + ask) / 2
+                            atm_mid = mid
+                            atm_spread = (ask - bid) / mid if mid > 0 else np.nan
+        except Exception:
+            pass
+
+        atm_mid_prices.append(atm_mid)
+        atm_spread_pcts.append(atm_spread)
+
         if progress_callback:
             progress_callback(i + 1, total)
 
@@ -541,6 +618,8 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
     df['atm_vega'] = atm_vegas
     df['atm_call_oi'] = atm_call_ois
     df['atm_put_oi'] = atm_put_ois
+    df['atm_mid_price'] = atm_mid_prices
+    df['atm_spread_pct'] = atm_spread_pcts
 
     return df
 
