@@ -196,28 +196,7 @@ def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
     Returns float (decimal) or np.nan.
     """
     try:
-        expirations = ticker_obj.options
-        if not expirations:
-            return np.nan
-
-        today = datetime.now().date()
-
-        # Find expiry closest to target_dte
-        best_exp = None
-        best_diff = float('inf')
-        for exp_str in expirations:
-            try:
-                exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
-                dte = (exp_date - today).days
-                if dte < 7:
-                    continue
-                diff = abs(dte - target_dte)
-                if diff < best_diff:
-                    best_diff = diff
-                    best_exp = exp_str
-            except Exception:
-                continue
-
+        best_exp = _find_best_expiry(ticker_obj, target_dte)
         if best_exp is None:
             return np.nan
 
@@ -266,6 +245,32 @@ def get_atm_iv(ticker_obj, target_dte: int = 30) -> float:
 
     except Exception:
         return np.nan
+
+
+def _find_best_expiry(ticker_obj, target_dte: int = 30) -> str | None:
+    """Return the option expiry string closest to target_dte. Returns None if none found."""
+    try:
+        expirations = ticker_obj.options
+        if not expirations:
+            return None
+        today = datetime.now().date()
+        best_exp = None
+        best_diff = float('inf')
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+                dte_days = (exp_date - today).days
+                if dte_days < 7:
+                    continue
+                diff = abs(dte_days - target_dte)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_exp = exp_str
+            except Exception:
+                continue
+        return best_exp
+    except Exception:
+        return None
 
 
 def get_earnings_info(ticker_obj):
@@ -358,51 +363,34 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
         try:
             row = {'ticker': ticker}
 
-            # Extract price series
-            close_series = None
-            if not raw.empty:
-                if isinstance(raw.columns, pd.MultiIndex):
-                    # MultiIndex: columns are (ticker, field) or (field, ticker)
-                    level0 = raw.columns.get_level_values(0).unique().tolist()
-                    if ticker in level0:
-                        close_series = raw[ticker]['Close'].dropna()
-                    elif 'Close' in level0:
-                        close_series = raw['Close'][ticker].dropna()
-                else:
-                    # Flat columns (legacy single-ticker without group_by)
-                    if 'Close' in raw.columns:
-                        close_series = raw['Close'].dropna()
+            # Extract OHLCV series for this ticker
+            ohlcv_series = {}
+            for field in ['Close', 'High', 'Low', 'Open']:
+                series = None
+                if not raw.empty:
+                    try:
+                        if isinstance(raw.columns, pd.MultiIndex):
+                            level0 = raw.columns.get_level_values(0)
+                            if ticker in level0:
+                                # (ticker, field) orientation
+                                series = raw[ticker][field].dropna()
+                            elif field in level0:
+                                # (field, ticker) orientation
+                                series = raw[field][ticker].dropna()
+                        else:
+                            if field in raw.columns:
+                                series = raw[field].dropna()
+                    except Exception:
+                        pass
+                ohlcv_series[field] = series
 
+            close_series = ohlcv_series['Close']
             if close_series is None or len(close_series) < 5:
                 continue
 
-            # Extract High, Low, Open arrays (needed for SMC signals)
-            high_series = None
-            low_series = None
-            open_series = None
-            if not raw.empty:
-                if isinstance(raw.columns, pd.MultiIndex):
-                    level0 = raw.columns.get_level_values(0).unique().tolist()
-                    if ticker in level0:
-                        high_series = raw[ticker]['High'].dropna()
-                        low_series = raw[ticker]['Low'].dropna()
-                        open_series = raw[ticker]['Open'].dropna()
-                    elif 'High' in level0:
-                        high_series = raw['High'][ticker].dropna()
-                        low_series = raw['Low'][ticker].dropna()
-                        open_series = raw['Open'][ticker].dropna()
-                else:
-                    # Flat columns (legacy single-ticker without group_by)
-                    if 'High' in raw.columns:
-                        high_series = raw['High'].dropna()
-                    if 'Low' in raw.columns:
-                        low_series = raw['Low'].dropna()
-                    if 'Open' in raw.columns:
-                        open_series = raw['Open'].dropna()
-
-            row['high_arr'] = high_series.values if high_series is not None else np.array([])
-            row['low_arr'] = low_series.values if low_series is not None else np.array([])
-            row['open_arr'] = open_series.values if open_series is not None else np.array([])
+            row['high_arr'] = ohlcv_series['High'].values if ohlcv_series['High'] is not None else np.array([])
+            row['low_arr'] = ohlcv_series['Low'].values if ohlcv_series['Low'] is not None else np.array([])
+            row['open_arr'] = ohlcv_series['Open'].values if ohlcv_series['Open'] is not None else np.array([])
 
             row['price'] = float(close_series.iloc[-1])
             row['hv30'] = compute_hv(close_series, window=30)
@@ -529,23 +517,8 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
         put_oi = np.nan
         try:
             price_val = row.get('price', 0)
-            exps = t.options
-            if exps and price_val > 0:
-                today = datetime.now().date()
-                best_exp = None
-                best_diff = float('inf')
-                for exp_str in exps:
-                    try:
-                        exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
-                        dte_days = (exp_date - today).days
-                        if dte_days < 7:
-                            continue
-                        diff = abs(dte_days - 30)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best_exp = exp_str
-                    except Exception:
-                        continue
+            if price_val > 0:
+                best_exp = _find_best_expiry(t)
                 if best_exp:
                     ch = t.option_chain(best_exp)
                     near_calls = ch.calls[abs(ch.calls['strike'] - price_val) / price_val < 0.05]
@@ -563,41 +536,25 @@ def enrich_with_iv(df: pd.DataFrame, progress_callback=None, risk_free_rate: flo
         atm_mid = np.nan
         atm_spread = np.nan
         try:
-            expirations = t.options
-            if expirations:
-                today = datetime.now().date()
-                best_exp = None
-                best_diff = float('inf')
-                for exp_str in expirations:
+            best_exp = _find_best_expiry(t)
+            if best_exp:
+                chain = t.option_chain(best_exp)
+                calls = chain.calls
+                price_val = row.get('price', 0)
+                if not calls.empty and price_val > 0:
+                    strikes = calls['strike'].values
+                    atm_idx = int(np.argmin(np.abs(strikes - price_val)))
+                    atm_row = calls.iloc[atm_idx]
                     try:
-                        exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
-                        dte_days = (exp_date - today).days
-                        if dte_days < 7:
-                            continue
-                        diff = abs(dte_days - 30)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best_exp = exp_str
+                        bid = float(atm_row['bid'])
+                        ask = float(atm_row['ask'])
                     except Exception:
-                        continue
-                if best_exp:
-                    chain = t.option_chain(best_exp)
-                    calls = chain.calls
-                    price_val = row.get('price', 0)
-                    if not calls.empty and price_val > 0:
-                        strikes = calls['strike'].values
-                        atm_idx = int(np.argmin(np.abs(strikes - price_val)))
-                        atm_row = calls.iloc[atm_idx]
-                        try:
-                            bid = float(atm_row['bid'])
-                            ask = float(atm_row['ask'])
-                        except Exception:
-                            bid = np.nan
-                            ask = np.nan
-                        if not np.isnan(bid) and not np.isnan(ask) and bid > 0 and ask > 0:
-                            mid = (bid + ask) / 2
-                            atm_mid = mid
-                            atm_spread = (ask - bid) / mid if mid > 0 else np.nan
+                        bid = np.nan
+                        ask = np.nan
+                    if not np.isnan(bid) and not np.isnan(ask) and bid > 0 and ask > 0:
+                        mid = (bid + ask) / 2
+                        atm_mid = mid
+                        atm_spread = (ask - bid) / mid if mid > 0 else np.nan
         except Exception:
             pass
 
