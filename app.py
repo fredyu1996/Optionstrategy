@@ -19,6 +19,7 @@ from screener import (
     batch_screen_fundamentals,
     enrich_with_iv,
     score_strategies,
+    get_strike_recommendation,
 )
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
 
@@ -289,6 +290,70 @@ def build_smc_tags(row: dict) -> str:
     return ' '.join(tags)
 
 
+def _build_rec_html(rec: dict, strategy: str, iv_hv_val: float, max_risk_usd: float) -> str:
+    """Build HTML for the recommended entry block inside a Top 10 card."""
+    if rec['strike'] is None:
+        return (
+            '<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;'
+            'font-size:0.75rem;color:#475569;">No recommendation available.</div>'
+        )
+
+    is_call = (strategy == 'Long Call')
+    try:
+        expiry_label = datetime.strptime(rec['expiry'], '%Y-%m-%d').strftime('%b %d')
+    except Exception:
+        expiry_label = rec['expiry'] or ''
+
+    dte_str = f"{rec['dte']} DTE" if rec['dte'] else ''
+    option_type = "Call" if is_call else "Put"
+
+    flag_html = ''
+    if rec.get('flag') == 'outside_ideal_range':
+        flag_html = ' <span style="color:#f59e0b;font-size:0.72rem;">⚠ outside ideal range</span>'
+    elif rec.get('flag') == 'over_budget':
+        flag_html = ' <span style="color:#ef4444;font-size:0.72rem;">⚠ over budget</span>'
+
+    aff_color = '#10b981' if rec['affordable'] else '#ef4444'
+    aff_label = '✓ Affordable' if rec['affordable'] else f'✗ Over Budget (${max_risk_usd:.0f} max)'
+
+    gamma_val = rec['gamma']
+    theta_val = rec['theta']
+    breakeven_val = rec['breakeven']
+    cost_val = rec['cost']
+
+    gamma_str = f"{gamma_val:.4f}" if not (isinstance(gamma_val, float) and np.isnan(gamma_val)) else 'N/A'
+    theta_str = f"${theta_val:.2f}/day" if not (isinstance(theta_val, float) and np.isnan(theta_val)) else 'N/A'
+    breakeven_str = f"${breakeven_val:.2f}" if not (isinstance(breakeven_val, float) and np.isnan(breakeven_val)) else 'N/A'
+    cost_str = f"${cost_val:.0f}" if not (isinstance(cost_val, float) and np.isnan(cost_val)) else 'N/A'
+    target_str = f"+${cost_val * 2:.0f}" if not (isinstance(cost_val, float) and np.isnan(cost_val)) else 'N/A'
+
+    crush_html = ''
+    if rec.get('iv_crush_warning') and not (isinstance(iv_hv_val, float) and np.isnan(iv_hv_val)):
+        crush_html = (
+            f'<div style="font-size:0.75rem;color:#f59e0b;margin-top:0.15rem;">'
+            f'⚠ IV elevated (IV/HV {iv_hv_val:.2f}) — risk of IV crush</div>'
+        )
+
+    return (
+        '<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;">'
+        '<div style="font-size:0.75rem;color:#94a3b8;font-weight:700;margin-bottom:0.15rem;">Recommended Entry</div>'
+        f'<div style="font-size:0.85rem;color:#e2e8f0;">'
+        f'Buy ${rec["strike"]:.0f} {option_type} &nbsp;|&nbsp; {expiry_label} ({dte_str}){flag_html}'
+        f'</div>'
+        f'<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.1rem;">'
+        f'Δ {rec["delta"]:.3f} &nbsp;|&nbsp; Γ {gamma_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; Breakeven: {breakeven_str}'
+        f'</div>'
+        f'<div style="font-size:0.78rem;margin-top:0.1rem;">'
+        f'Cost: <strong>{cost_str}/contract</strong> &nbsp;|&nbsp; '
+        f'<span style="color:{aff_color};">{aff_label}</span> &nbsp;|&nbsp; '
+        f'2:1 Target: <strong style="color:#10b981;">{target_str}</strong>'
+        f'</div>'
+        f'{crush_html}'
+        f'<div style="font-size:0.72rem;color:#475569;margin-top:0.2rem;">{rec["reason"]}</div>'
+        '</div>'
+    )
+
+
 # ──────────────────────────────────────────────
 # VIX Chart
 # ──────────────────────────────────────────────
@@ -479,12 +544,11 @@ with st.sidebar:
         value=float(round(fx_rate_default, 4)),
         step=0.001, format="%.4f",
     )
-    risk_pct_label = st.selectbox(
-        "Risk per Trade",
-        options=["10%", "20%", "33%"],
-        index=2,
+    risk_pct_int = st.slider(
+        "Risk per Trade (%)",
+        min_value=10, max_value=100, value=33, step=1,
     )
-    risk_pct = int(risk_pct_label.replace('%', '')) / 100
+    risk_pct = risk_pct_int / 100
 
     budget_usd = account_cad * fx_rate
     max_risk_usd = budget_usd * risk_pct
@@ -798,28 +862,21 @@ if st.session_state.screening_results is not None:
             ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
             score = r.get('lc_score', 0)
             price_val = r.get('price', 0)
-            cost_val = r.get('atm_mid_price', np.nan)
-            cost_usd = cost_val * 100 if not (isinstance(cost_val, float) and np.isnan(cost_val)) else np.nan
-            is_affordable = not (isinstance(cost_usd, float) and np.isnan(cost_usd)) and cost_usd <= budget_config['max_risk_usd']
-            if not (isinstance(cost_usd, float) and np.isnan(cost_usd)):
-                if is_affordable:
-                    budget_line = (
-                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
-                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
-                        f'<span style="color:#10b981;">✓ Affordable</span> &nbsp;|&nbsp; '
-                        f'Max Loss: <strong>${cost_usd:.0f}</strong> &nbsp;|&nbsp; '
-                        f'2:1 Target: <strong style="color:#10b981;">+${cost_usd*2:.0f}</strong>'
-                        f'</div>'
-                    )
-                else:
-                    budget_line = (
-                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
-                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
-                        f'<span style="color:#ef4444;">✗ Over Budget (${budget_config["max_risk_usd"]:.0f} max)</span>'
-                        f'</div>'
-                    )
-            else:
-                budget_line = ''
+
+            smc_tuple = (
+                bool(r.get('smc_bos_bullish')), bool(r.get('smc_bos_bearish')),
+                bool(r.get('smc_choch_bullish')), bool(r.get('smc_choch_bearish')),
+                bool(r.get('smc_discount_zone')), bool(r.get('smc_premium_zone')),
+                bool(r.get('smc_near_bullish_ob')), bool(r.get('smc_near_bearish_ob')),
+                bool(r.get('smc_in_bullish_fvg')), bool(r.get('smc_in_bearish_fvg')),
+            )
+            rec = get_strike_recommendation(
+                r['ticker'], 'Long Call',
+                float(iv_hv_val) if not np.isnan(iv_hv_val) else 0.9,
+                smc_tuple,
+                budget_config['max_risk_usd'],
+            )
+            rec_html = _build_rec_html(rec, 'Long Call', iv_hv_val, budget_config['max_risk_usd'])
 
             smc_tags = build_smc_tags(r.to_dict())
             smc_row = f'<div style="margin:0.25rem 0;">{smc_tags}</div>' if smc_tags else ''
@@ -838,8 +895,11 @@ if st.session_state.screening_results is not None:
 <div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
   IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
 </div>
-{budget_line}
+{rec_html}
 </div>""", unsafe_allow_html=True)
+                if not rec['chain_df'].empty:
+                    with st.expander(f"Options chain — {r['ticker']}"):
+                        st.dataframe(rec['chain_df'], use_container_width=True, hide_index=True)
 
     with col_lp:
         st.markdown("#### 📉 Top 5 Long Put")
@@ -857,28 +917,21 @@ if st.session_state.screening_results is not None:
             ret_str = f"{ret_val:+.1f}%" if not np.isnan(ret_val) else "N/A"
             score = r.get('lp_score', 0)
             price_val = r.get('price', 0)
-            cost_val = r.get('atm_mid_price', np.nan)
-            cost_usd = cost_val * 100 if not (isinstance(cost_val, float) and np.isnan(cost_val)) else np.nan
-            is_affordable = not (isinstance(cost_usd, float) and np.isnan(cost_usd)) and cost_usd <= budget_config['max_risk_usd']
-            if not (isinstance(cost_usd, float) and np.isnan(cost_usd)):
-                if is_affordable:
-                    budget_line = (
-                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
-                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
-                        f'<span style="color:#10b981;">✓ Affordable</span> &nbsp;|&nbsp; '
-                        f'Max Loss: <strong>${cost_usd:.0f}</strong> &nbsp;|&nbsp; '
-                        f'2:1 Target: <strong style="color:#10b981;">+${cost_usd*2:.0f}</strong>'
-                        f'</div>'
-                    )
-                else:
-                    budget_line = (
-                        f'<div style="border-top:1px solid #334155;margin-top:0.4rem;padding-top:0.4rem;font-size:0.78rem;">'
-                        f'💰 Cost: <strong>${cost_usd:.0f}/contract</strong> &nbsp;|&nbsp; '
-                        f'<span style="color:#ef4444;">✗ Over Budget (${budget_config["max_risk_usd"]:.0f} max)</span>'
-                        f'</div>'
-                    )
-            else:
-                budget_line = ''
+
+            smc_tuple = (
+                bool(r.get('smc_bos_bullish')), bool(r.get('smc_bos_bearish')),
+                bool(r.get('smc_choch_bullish')), bool(r.get('smc_choch_bearish')),
+                bool(r.get('smc_discount_zone')), bool(r.get('smc_premium_zone')),
+                bool(r.get('smc_near_bullish_ob')), bool(r.get('smc_near_bearish_ob')),
+                bool(r.get('smc_in_bullish_fvg')), bool(r.get('smc_in_bearish_fvg')),
+            )
+            rec = get_strike_recommendation(
+                r['ticker'], 'Long Put',
+                float(iv_hv_val) if not np.isnan(iv_hv_val) else 0.9,
+                smc_tuple,
+                budget_config['max_risk_usd'],
+            )
+            rec_html = _build_rec_html(rec, 'Long Put', iv_hv_val, budget_config['max_risk_usd'])
 
             smc_tags = build_smc_tags(r.to_dict())
             smc_row = f'<div style="margin:0.25rem 0;">{smc_tags}</div>' if smc_tags else ''
@@ -897,8 +950,11 @@ if st.session_state.screening_results is not None:
 <div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;">
   IV/HV: {iv_str} &nbsp;|&nbsp; Δ {delta_str} &nbsp;|&nbsp; Θ {theta_str} &nbsp;|&nbsp; OI: {oi_str}
 </div>
-{budget_line}
+{rec_html}
 </div>""", unsafe_allow_html=True)
+                if not rec['chain_df'].empty:
+                    with st.expander(f"Options chain — {r['ticker']}"):
+                        st.dataframe(rec['chain_df'], use_container_width=True, hide_index=True)
 
     # Ticker selector for detail view
     st.markdown("---")
