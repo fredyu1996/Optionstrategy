@@ -281,6 +281,155 @@ def _select_best_strike(
     return min(strike_data, key=lambda x: x['cost']), 'over_budget'
 
 
+@st.cache_data(ttl=900)
+def get_strike_recommendation(
+    ticker_str: str,
+    strategy: str,
+    iv_hv: float,
+    smc_tuple: tuple,
+    max_risk_usd: float,
+) -> dict:
+    """
+    Recommend a specific strike for ticker based on IV/HV, SMC signals, and budget.
+
+    smc_tuple order: (bos_bull, bos_bear, choch_bull, choch_bear, disc, prem,
+                      ob_bull, ob_bear, fvg_bull, fvg_bear)
+    """
+    smc_keys = [
+        'bos_bullish', 'bos_bearish', 'choch_bullish', 'choch_bearish',
+        'discount_zone', 'premium_zone', 'near_bullish_ob', 'near_bearish_ob',
+        'in_bullish_fvg', 'in_bearish_fvg',
+    ]
+    smc = dict(zip(smc_keys, smc_tuple))
+    is_call = (strategy == 'Long Call')
+
+    relevant_keys = (
+        ['bos_bullish', 'discount_zone', 'near_bullish_ob', 'in_bullish_fvg', 'choch_bullish']
+        if is_call else
+        ['bos_bearish', 'premium_zone', 'near_bearish_ob', 'in_bearish_fvg', 'choch_bearish']
+    )
+    smc_count = sum(1 for k in relevant_keys if smc.get(k, False))
+
+    delta_lo, delta_hi, delta_center = _compute_delta_range(iv_hv, smc_count, is_call)
+
+    try:
+        t = yf.Ticker(ticker_str)
+        expiry = _find_best_expiry(t, target_dte=30)
+        if expiry is None:
+            return _empty_recommendation()
+
+        today = datetime.now().date()
+        exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+        dte = max((exp_date - today).days, 1)
+        T = dte / 365
+
+        hist = t.history(period='1d')
+        S = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
+        if S <= 0:
+            return _empty_recommendation()
+
+        chain = t.option_chain(expiry)
+        options = chain.calls if is_call else chain.puts
+        if options.empty:
+            return _empty_recommendation()
+    except Exception:
+        return _empty_recommendation()
+
+    strike_data = []
+    for _, opt_row in options.iterrows():
+        try:
+            K = float(opt_row['strike'])
+            iv_val = float(opt_row.get('impliedVolatility') or 0)
+            bid = float(opt_row.get('bid') or 0)
+            ask = float(opt_row.get('ask') or 0)
+            if iv_val <= 0 or bid <= 0 or ask <= 0:
+                continue
+            mid = (bid + ask) / 2
+            cost = mid * 100
+            g = compute_greeks(S, K, T, 0.045, iv_val, 'call' if is_call else 'put')
+            if np.isnan(g['delta']):
+                continue
+            strike_data.append({
+                'strike': K,
+                'delta': g['delta'],
+                'gamma': g['gamma'],
+                'theta': g['theta'],
+                'cost': cost,
+                'affordable': cost <= max_risk_usd,
+            })
+        except Exception:
+            continue
+
+    if not strike_data:
+        return _empty_recommendation()
+
+    strike_data.sort(key=lambda x: x['strike'])
+    chosen, flag = _select_best_strike(
+        strike_data, delta_lo, delta_hi, delta_center, max_risk_usd, is_call, S
+    )
+
+    # Handle edge case where _select_best_strike returns empty dict
+    if not chosen:
+        return _empty_recommendation()
+
+    # Build human-readable reason
+    if np.isnan(iv_hv) or iv_hv <= 0:
+        iv_desc = "fair vol → Δ 0.35–0.45 target"
+    elif iv_hv < 0.8:
+        iv_desc = "cheap vol → ATM target"
+    elif iv_hv <= 1.0:
+        iv_desc = "fair vol → Δ 0.35–0.45 target"
+    else:
+        iv_desc = "expensive vol → Δ 0.25–0.35 target"
+
+    if smc_count >= 3:
+        smc_adj = f"{smc_count} SMC signals → shifted OTM"
+    elif smc_count <= 1:
+        smc_adj = f"{smc_count} SMC signals → shifted toward ATM"
+    else:
+        smc_adj = f"{smc_count} SMC signals → no adjustment"
+
+    reason = f"IV/HV {iv_hv:.2f} ({iv_desc}). {smc_adj}. Best affordable: Δ {chosen['delta']:.2f}."
+
+    cost_per_share = chosen['cost'] / 100
+    breakeven = (chosen['strike'] + cost_per_share if is_call
+                 else chosen['strike'] - cost_per_share)
+
+    # 5-strike chain: 2 below + chosen + 2 above
+    strikes_list = [s['strike'] for s in strike_data]
+    try:
+        idx = strikes_list.index(chosen['strike'])
+    except ValueError:
+        idx = len(strike_data) // 2
+    subset = strike_data[max(0, idx - 2): min(len(strike_data), idx + 3)]
+
+    chain_df = pd.DataFrame([{
+        'Strike': f"${s['strike']:.0f}" + (" ★" if s['strike'] == chosen['strike'] else ""),
+        'Delta': round(s['delta'], 3),
+        'Cost': f"${s['cost']:.0f}",
+        'Θ/day': f"${s['theta']:.2f}",
+        'Affordable': "✓" if s['affordable'] else "✗",
+    } for s in subset])
+
+    return {
+        'strike': chosen['strike'],
+        'expiry': expiry,
+        'dte': dte,
+        'delta': chosen['delta'],
+        'gamma': chosen['gamma'],
+        'theta': chosen['theta'],
+        'cost': chosen['cost'],
+        'affordable': chosen['affordable'],
+        'breakeven': breakeven,
+        'iv_crush_warning': (not (np.isnan(iv_hv) or iv_hv <= 0) and iv_hv > 1.0),
+        'delta_target_center': delta_center,
+        'smc_active_count': smc_count,
+        'reason': reason,
+        'chain_df': chain_df,
+        'flag': flag,
+    }
+
+
 def compute_smc_signals(ohlcv_df: pd.DataFrame) -> dict:
     """
     Compute SMC signals from OHLCV DataFrame.
