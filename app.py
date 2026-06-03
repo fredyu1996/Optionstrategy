@@ -23,6 +23,7 @@ from screener import (
 )
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
 from chatbot import render_chat_button
+from signals import compute_entry_readiness, compute_exit_rules
 
 
 @st.cache_data(ttl=3600)
@@ -355,6 +356,96 @@ def _build_rec_html(rec: dict, strategy: str, iv_hv_val: float, max_risk_usd: fl
         f'<div style="font-size:0.72rem;color:#475569;margin-top:0.2rem;">{rec["reason"]}</div>'
         '</div>'
     )
+
+
+_PLAYBOOK_STATUS = {
+    'enter':   ('🟢', 'Enter Now',             '#10b981'),
+    'wait':    ('🟡', 'Wait for Confirmation', '#f59e0b'),
+    'not_yet': ('🔴', 'Not Yet',               '#ef4444'),
+}
+
+
+def _render_playbook_col(readiness: dict, exits: dict, strategy_label: str) -> None:
+    """Render entry readiness + exit rules for one strategy column in the Playbook tab."""
+    emoji, status_text, status_color = _PLAYBOOK_STATUS[readiness['status']]
+    met = readiness['met']
+    total = readiness['total']
+
+    st.markdown(f"#### {strategy_label}")
+
+    st.markdown(
+        f'<div style="background:#1e293b;border:1px solid {status_color}55;'
+        f'border-left:4px solid {status_color};border-radius:0.5rem;'
+        f'padding:0.75rem 1rem;margin-bottom:0.75rem;">'
+        f'<div style="font-size:0.78rem;color:#94a3b8;font-weight:700;'
+        f'margin-bottom:0.3rem;">ENTRY READINESS</div>'
+        f'<div style="font-size:1.2rem;font-weight:700;color:{status_color};">'
+        f'{emoji} {status_text}</div>'
+        f'<div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem;">'
+        f'{met}/{total} conditions met</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    for check in readiness['checks']:
+        icon = '✓' if check['passed'] else '✗'
+        color = '#10b981' if check['passed'] else '#ef4444'
+        st.markdown(
+            f'<div style="font-size:0.82rem;margin:0.15rem 0;">'
+            f'<span style="color:{color};font-weight:700;">{icon}</span> '
+            f'<span style="color:#e2e8f0;">{check["label"]}</span> '
+            f'<span style="color:#64748b;">({check["value"]})</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<div style="margin:0.75rem 0;border-top:1px solid #334155;"></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div style="font-size:0.78rem;color:#94a3b8;font-weight:700;'
+        'margin-bottom:0.4rem;">EXIT RULES</div>',
+        unsafe_allow_html=True,
+    )
+
+    tp_usd = exits['take_profit_usd']
+    sl_usd = exits['stop_loss_usd']
+    tp_str = f"${tp_usd:.0f}" if not (isinstance(tp_usd, float) and np.isnan(tp_usd)) else 'N/A'
+    sl_str = f"${sl_usd:.0f}" if not (isinstance(sl_usd, float) and np.isnan(sl_usd)) else 'N/A'
+
+    st.markdown(
+        f'<div style="font-size:0.82rem;margin:0.2rem 0;color:#e2e8f0;">'
+        f'💰 <strong>Take Profit</strong> +100% → '
+        f'<span style="color:#10b981;">{tp_str}</span></div>'
+        f'<div style="font-size:0.82rem;margin:0.2rem 0;color:#e2e8f0;">'
+        f'🛑 <strong>Stop Loss</strong> -50% → '
+        f'<span style="color:#ef4444;">{sl_str}</span></div>'
+        f'<div style="font-size:0.82rem;margin:0.2rem 0;color:#e2e8f0;">'
+        f'⏰ <strong>Time</strong> {exits["time_exit_msg"]}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div style="font-size:0.78rem;color:#94a3b8;margin:0.5rem 0 0.25rem;">'
+        'Tech exits (watch for):</div>',
+        unsafe_allow_html=True,
+    )
+
+    for trigger in exits['tech_triggers']:
+        t_icon = '⚠️' if trigger['triggered'] else '✓'
+        t_color = '#f59e0b' if trigger['triggered'] else '#64748b'
+        t_status = 'TRIGGERED' if trigger['triggered'] else 'safe'
+        st.markdown(
+            f'<div style="font-size:0.79rem;margin:0.12rem 0;">'
+            f'<span style="color:{t_color};">{t_icon}</span> '
+            f'{trigger["label"]} — '
+            f'<span style="color:#94a3b8;">{trigger["current_value"]}</span> '
+            f'<span style="color:{t_color};font-weight:600;">({t_status})</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -1034,7 +1125,11 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
         st.markdown("---")
 
         # Tabs
-        tab1, tab2 = st.tabs(["📈 Strategy Recommendations", "⛓️ Option Chain"])
+        tab1, tab2, tab3 = st.tabs([
+            "📈 Strategy Recommendations",
+            "⛓️ Option Chain",
+            "🎯 Entry/Exit Playbook",
+        ])
 
         # ── Tab 1: Strategy Recommendations ──
         with tab1:
@@ -1181,6 +1276,36 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
                         )
                     else:
                         st.info("No put data available.")
+
+        # ── Tab 3: Entry/Exit Playbook ──
+        with tab3:
+            smc_tuple = (
+                bool(row.get('smc_bos_bullish')),     bool(row.get('smc_bos_bearish')),
+                bool(row.get('smc_choch_bullish')),   bool(row.get('smc_choch_bearish')),
+                bool(row.get('smc_discount_zone')),   bool(row.get('smc_premium_zone')),
+                bool(row.get('smc_near_bullish_ob')), bool(row.get('smc_near_bearish_ob')),
+                bool(row.get('smc_in_bullish_fvg')),  bool(row.get('smc_in_bearish_fvg')),
+            )
+            iv_hv_val = row.get('iv_hv_ratio', np.nan)
+            iv_hv_for_rec = float(iv_hv_val) if not (isinstance(iv_hv_val, float) and np.isnan(iv_hv_val)) else 0.9
+
+            rec_lc = get_strike_recommendation(
+                ticker_str, 'Long Call', iv_hv_for_rec, smc_tuple, budget_config['max_risk_usd'],
+            )
+            rec_lp = get_strike_recommendation(
+                ticker_str, 'Long Put', iv_hv_for_rec, smc_tuple, budget_config['max_risk_usd'],
+            )
+
+            readiness_lc = compute_entry_readiness(row, 'Long Call')
+            readiness_lp = compute_entry_readiness(row, 'Long Put')
+            exits_lc = compute_exit_rules(row, 'Long Call', rec_lc)
+            exits_lp = compute_exit_rules(row, 'Long Put', rec_lp)
+
+            col_lc, col_lp = st.columns(2)
+            with col_lc:
+                _render_playbook_col(readiness_lc, exits_lc, '📈 Long Call')
+            with col_lp:
+                _render_playbook_col(readiness_lp, exits_lp, '📉 Long Put')
 
 
 # ──────────────────────────────────────────────
