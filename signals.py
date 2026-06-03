@@ -17,13 +17,15 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
         total: int  (always 6)
         checks: list of {label, passed, value}
     """
-    is_call = (strategy == 'Long Call')
     if strategy not in ('Long Call', 'Long Put'):
         raise ValueError(f"Unknown strategy: {strategy!r}")
+    is_call = (strategy == 'Long Call')
     rsi = row.get('rsi', np.nan)
     iv_hv = row.get('iv_hv_ratio', np.nan)
     trend = row.get('trend', 'Unknown')
     days_earn = row.get('days_to_earnings', None)
+    if days_earn is not None and pd.isna(days_earn):
+        days_earn = None
 
     if is_call:
         checks = [
@@ -127,9 +129,9 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
         time_exit_dte, time_exit_date, time_exit_msg,
         tech_triggers: list of {label, triggered, current_value}
     """
-    is_call = (strategy == 'Long Call')
     if strategy not in ('Long Call', 'Long Put'):
         raise ValueError(f"Unknown strategy: {strategy!r}")
+    is_call = (strategy == 'Long Call')
     rsi = row.get('rsi', np.nan)
     cost = rec.get('cost', np.nan)
     dte = rec.get('dte', None)
@@ -142,11 +144,11 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
         stop_loss_usd = np.nan
 
     time_exit_dte = 21
-    if dte is not None and dte > 21:
+    if dte is not None and not pd.isna(dte) and dte > 21:
         exit_date = datetime.now() + timedelta(days=dte - 21)
         time_exit_date = exit_date.strftime('%b %d, %Y')
         time_exit_msg = f"Close at 21 DTE → {time_exit_date}"
-    elif dte is not None:
+    elif dte is not None and not pd.isna(dte):
         time_exit_date = datetime.now().strftime('%b %d, %Y')
         time_exit_msg = "Exit now (past 21 DTE threshold)"
     else:

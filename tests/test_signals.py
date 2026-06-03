@@ -112,6 +112,14 @@ class TestEntryReadinessLongCall:
             assert 'passed' in check
             assert 'value' in check
 
+    def test_nan_days_to_earnings_treated_as_safe(self):
+        row = _bullish_row()
+        row['days_to_earnings'] = float('nan')
+        result = compute_entry_readiness(row, 'Long Call')
+        earn_check = next(c for c in result['checks'] if 'earnings' in c['label'].lower())
+        assert earn_check['passed'] is True
+        assert earn_check['value'] == 'none'
+
 
 class TestEntryReadinessLongPut:
     def test_all_pass_returns_enter(self):
@@ -223,6 +231,18 @@ class TestExitRules:
     def test_no_triggers_active_when_conditions_safe(self):
         result = compute_exit_rules(_bullish_row(), 'Long Call', _base_rec())
         assert all(not t['triggered'] for t in result['tech_triggers'])
+
+    def test_nan_dte_falls_to_unknown_branch(self):
+        rec = {'cost': 420.0, 'dte': float('nan'), 'strike': 150.0}
+        result = compute_exit_rules(_bullish_row(), 'Long Call', rec)
+        assert result['time_exit_date'] is None
+        assert result['time_exit_msg'] == "Close at 21 DTE"
+
+    def test_none_dte_falls_to_unknown_branch(self):
+        rec = {'cost': 420.0, 'dte': None, 'strike': 150.0}
+        result = compute_exit_rules(_bullish_row(), 'Long Call', rec)
+        assert result['time_exit_date'] is None
+        assert result['time_exit_msg'] == "Close at 21 DTE"
 
 
 class TestValidation:
