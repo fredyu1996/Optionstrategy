@@ -4,6 +4,7 @@ signals.py - Entry readiness and exit rules for Long Call / Long Put positions.
 """
 from datetime import datetime, timedelta
 import numpy as np
+import pandas as pd
 
 
 def compute_entry_readiness(row: dict, strategy: str) -> dict:
@@ -17,6 +18,8 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
         checks: list of {label, passed, value}
     """
     is_call = (strategy == 'Long Call')
+    if strategy not in ('Long Call', 'Long Put'):
+        raise ValueError(f"Unknown strategy: {strategy!r}")
     rsi = row.get('rsi', np.nan)
     iv_hv = row.get('iv_hv_ratio', np.nan)
     trend = row.get('trend', 'Unknown')
@@ -31,8 +34,8 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
             },
             {
                 'label': 'RSI < 50',
-                'passed': not (isinstance(rsi, float) and np.isnan(rsi)) and rsi < 50,
-                'value': f"{rsi:.0f}" if not (isinstance(rsi, float) and np.isnan(rsi)) else 'N/A',
+                'passed': not pd.isna(rsi) and rsi < 50,
+                'value': f"{rsi:.0f}" if not pd.isna(rsi) else 'N/A',
             },
             {
                 'label': 'Bullish SMC signal',
@@ -52,8 +55,8 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
             },
             {
                 'label': 'IV/HV < 1.0',
-                'passed': not (isinstance(iv_hv, float) and np.isnan(iv_hv)) and iv_hv < 1.0,
-                'value': f"{iv_hv:.2f}" if not (isinstance(iv_hv, float) and np.isnan(iv_hv)) else 'N/A',
+                'passed': not pd.isna(iv_hv) and iv_hv < 1.0,
+                'value': f"{iv_hv:.2f}" if not pd.isna(iv_hv) else 'N/A',
             },
             {
                 'label': 'No near earnings',
@@ -70,8 +73,8 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
             },
             {
                 'label': 'RSI > 50',
-                'passed': not (isinstance(rsi, float) and np.isnan(rsi)) and rsi > 50,
-                'value': f"{rsi:.0f}" if not (isinstance(rsi, float) and np.isnan(rsi)) else 'N/A',
+                'passed': not pd.isna(rsi) and rsi > 50,
+                'value': f"{rsi:.0f}" if not pd.isna(rsi) else 'N/A',
             },
             {
                 'label': 'Bearish SMC signal',
@@ -91,8 +94,8 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
             },
             {
                 'label': 'IV/HV < 1.0',
-                'passed': not (isinstance(iv_hv, float) and np.isnan(iv_hv)) and iv_hv < 1.0,
-                'value': f"{iv_hv:.2f}" if not (isinstance(iv_hv, float) and np.isnan(iv_hv)) else 'N/A',
+                'passed': not pd.isna(iv_hv) and iv_hv < 1.0,
+                'value': f"{iv_hv:.2f}" if not pd.isna(iv_hv) else 'N/A',
             },
             {
                 'label': 'No near earnings',
@@ -125,11 +128,13 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
         tech_triggers: list of {label, triggered, current_value}
     """
     is_call = (strategy == 'Long Call')
+    if strategy not in ('Long Call', 'Long Put'):
+        raise ValueError(f"Unknown strategy: {strategy!r}")
     rsi = row.get('rsi', np.nan)
     cost = rec.get('cost', np.nan)
     dte = rec.get('dte', None)
 
-    if cost is not None and not (isinstance(cost, float) and np.isnan(cost)):
+    if not pd.isna(cost):
         take_profit_usd = round(cost * 2.0, 2)
         stop_loss_usd = round(cost * 0.5, 2)
     else:
@@ -148,7 +153,7 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
         time_exit_date = None
         time_exit_msg = "Close at 21 DTE"
 
-    rsi_val = rsi if not (isinstance(rsi, float) and np.isnan(rsi)) else None
+    rsi_val = rsi if not pd.isna(rsi) else None
     rsi_str = f"RSI {rsi_val:.0f}" if rsi_val is not None else 'N/A'
 
     if is_call:

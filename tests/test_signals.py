@@ -175,42 +175,42 @@ class TestExitRules:
         row = _bullish_row()
         row['rsi'] = 75.0
         result = compute_exit_rules(row, 'Long Call', _base_rec())
-        rsi_trigger = result['tech_triggers'][0]
+        rsi_trigger = next(t for t in result['tech_triggers'] if 'RSI' in t['label'])
         assert rsi_trigger['triggered'] is True
 
     def test_long_call_bearish_bos_trigger(self):
         row = _bullish_row()
         row['smc_bos_bearish'] = True
         result = compute_exit_rules(row, 'Long Call', _base_rec())
-        bos_trigger = result['tech_triggers'][1]
+        bos_trigger = next(t for t in result['tech_triggers'] if 'BoS' in t['label'])
         assert bos_trigger['triggered'] is True
 
     def test_long_call_premium_zone_trigger(self):
         row = _bullish_row()
         row['smc_premium_zone'] = True
         result = compute_exit_rules(row, 'Long Call', _base_rec())
-        zone_trigger = result['tech_triggers'][2]
+        zone_trigger = next(t for t in result['tech_triggers'] if 'Premium' in t['label'])
         assert zone_trigger['triggered'] is True
 
     def test_long_put_rsi_trigger_fires_below_30(self):
         row = _bearish_row()
         row['rsi'] = 25.0
         result = compute_exit_rules(row, 'Long Put', _base_rec())
-        rsi_trigger = result['tech_triggers'][0]
+        rsi_trigger = next(t for t in result['tech_triggers'] if 'RSI' in t['label'])
         assert rsi_trigger['triggered'] is True
 
     def test_long_put_bullish_bos_trigger(self):
         row = _bearish_row()
         row['smc_bos_bullish'] = True
         result = compute_exit_rules(row, 'Long Put', _base_rec())
-        bos_trigger = result['tech_triggers'][1]
+        bos_trigger = next(t for t in result['tech_triggers'] if 'BoS' in t['label'])
         assert bos_trigger['triggered'] is True
 
     def test_long_put_discount_zone_trigger(self):
         row = _bearish_row()
         row['smc_discount_zone'] = True
         result = compute_exit_rules(row, 'Long Put', _base_rec())
-        zone_trigger = result['tech_triggers'][2]
+        zone_trigger = next(t for t in result['tech_triggers'] if 'Discount' in t['label'])
         assert zone_trigger['triggered'] is True
 
     def test_tech_triggers_have_required_keys(self):
@@ -223,3 +223,13 @@ class TestExitRules:
     def test_no_triggers_active_when_conditions_safe(self):
         result = compute_exit_rules(_bullish_row(), 'Long Call', _base_rec())
         assert all(not t['triggered'] for t in result['tech_triggers'])
+
+
+class TestValidation:
+    def test_invalid_strategy_raises(self):
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            compute_entry_readiness(_bullish_row(), 'Long Strangle')
+
+    def test_invalid_strategy_exit_raises(self):
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            compute_exit_rules(_bullish_row(), 'Long Strangle', _base_rec())
