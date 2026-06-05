@@ -4,7 +4,7 @@ import pytest
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from signals import compute_entry_readiness, compute_exit_rules
+from signals import compute_entry_readiness, compute_exit_rules, compute_sell_verdict
 
 
 def _bullish_row():
@@ -253,3 +253,94 @@ class TestValidation:
     def test_invalid_strategy_exit_raises(self):
         with pytest.raises(ValueError, match="Unknown strategy"):
             compute_exit_rules(_bullish_row(), 'Long Strangle', _base_rec())
+
+
+# ── compute_sell_verdict ──────────────────────────────────────────────────────
+
+def _exits_with_triggers(n_active: int) -> dict:
+    """Build an exits dict with n_active triggered tech triggers (max 3)."""
+    labels = ['RSI > 70 (overbought)', 'Bearish BoS forms', 'Price enters Premium Zone']
+    triggers = [
+        {'label': labels[i], 'triggered': i < n_active, 'current_value': 'x'}
+        for i in range(3)
+    ]
+    return {'tech_triggers': triggers}
+
+
+class TestSellVerdict:
+    # ── condition layer: tech triggers ──
+    def test_two_triggers_returns_sell(self):
+        result = compute_sell_verdict(_exits_with_triggers(2), {'cost': 420.0, 'dte': 45})
+        assert result['status'] == 'sell'
+
+    def test_one_trigger_returns_trim(self):
+        result = compute_sell_verdict(_exits_with_triggers(1), {'cost': 420.0, 'dte': 45})
+        assert result['status'] == 'trim'
+
+    def test_zero_triggers_far_dte_returns_hold(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 45})
+        assert result['status'] == 'hold'
+        assert result['reasons'] == []
+
+    # ── condition layer: time ──
+    def test_past_21_dte_returns_sell(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 21})
+        assert result['status'] == 'sell'
+
+    def test_dte_24_returns_trim(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 24})
+        assert result['status'] == 'trim'
+
+    def test_dte_none_no_time_contribution(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': None})
+        assert result['status'] == 'hold'
+
+    # ── P/L layer ──
+    def test_pnl_target_hit_returns_sell(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 924.0, 'dte': 45}, entry_premium=420.0)
+        assert result['status'] == 'sell'
+        assert result['pnl_pct'] == pytest.approx(1.2)
+
+    def test_pnl_stop_hit_returns_sell(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 180.0, 'dte': 45}, entry_premium=420.0)
+        assert result['status'] == 'sell'
+
+    def test_pnl_partial_returns_trim(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 672.0, 'dte': 45}, entry_premium=420.0)
+        assert result['status'] == 'trim'
+
+    def test_pnl_layer_beats_condition_layer(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 882.0, 'dte': 45}, entry_premium=420.0)
+        assert result['status'] == 'sell'
+
+    def test_condition_layer_beats_pnl_layer(self):
+        result = compute_sell_verdict(_exits_with_triggers(2), {'cost': 462.0, 'dte': 45}, entry_premium=420.0)
+        assert result['status'] == 'sell'
+
+    # ── entry premium guards ──
+    def test_entry_premium_none_pnl_is_none(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 45})
+        assert result['pnl_pct'] is None
+
+    def test_entry_premium_zero_treated_as_none(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 45}, entry_premium=0.0)
+        assert result['pnl_pct'] is None
+
+    def test_nan_cost_pnl_is_none(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': float('nan'), 'dte': 45}, entry_premium=420.0)
+        assert result['pnl_pct'] is None
+
+    # ── reasons ──
+    def test_reasons_lists_triggered_labels(self):
+        result = compute_sell_verdict(_exits_with_triggers(2), {'cost': 420.0, 'dte': 45})
+        joined = ' '.join(result['reasons'])
+        assert 'RSI > 70 (overbought)' in joined
+        assert 'Bearish BoS forms' in joined
+
+    def test_reasons_includes_time_stop(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 21})
+        assert any('21 DTE' in r for r in result['reasons'])
+
+    def test_result_has_required_keys(self):
+        result = compute_sell_verdict(_exits_with_triggers(0), {'cost': 420.0, 'dte': 45})
+        assert set(result.keys()) == {'status', 'reasons', 'pnl_pct'}

@@ -207,6 +207,72 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
     }
 
 
+def compute_sell_verdict(exits: dict, rec: dict, entry_premium=None) -> dict:
+    """
+    Aggregate exit signals into a single SELL / TRIM / HOLD verdict.
+
+    Args:
+        exits: output of compute_exit_rules() — provides 'tech_triggers'.
+        rec:   strike recommendation — provides 'cost' (current price estimate)
+               and 'dte'.
+        entry_premium: user's fill in dollars, same unit as rec['cost'].
+               None / 0 / negative / NaN → condition-only verdict (no P/L).
+
+    Returns:
+        status:  'hold' | 'trim' | 'sell'  (most-severe across both layers)
+        reasons: list[str] of plain-English drivers (empty for a clean hold)
+        pnl_pct: float | None  (None when entry_premium unusable or cost NaN)
+    """
+    severity = {'hold': 0, 'trim': 1, 'sell': 2}
+    reasons = []
+
+    # ── Condition layer (always evaluated) ──
+    active = [t for t in exits.get('tech_triggers', []) if t.get('triggered')]
+    n = len(active)
+    dte = rec.get('dte', None)
+    dte_valid = dte is not None and not pd.isna(dte)
+
+    if n >= 2 or (dte_valid and dte <= 21):
+        cond_status = 'sell'
+    elif n == 1 or (dte_valid and dte <= 25):
+        cond_status = 'trim'
+    else:
+        cond_status = 'hold'
+
+    if n >= 1:
+        labels = ', '.join(t['label'] for t in active)
+        reasons.append(f"{n} tech exit{'s' if n > 1 else ''} active: {labels}")
+    if dte_valid and dte <= 21:
+        reasons.append("Past 21 DTE — time stop")
+    elif dte_valid and dte <= 25:
+        reasons.append("Approaching 21 DTE")
+
+    # ── P/L layer (only with a usable entry premium and cost) ──
+    pnl_pct = None
+    pnl_status = 'hold'
+    cost = rec.get('cost', np.nan)
+    if (entry_premium is not None and not pd.isna(entry_premium)
+            and entry_premium > 0 and not pd.isna(cost)):
+        pnl_pct = cost / entry_premium - 1.0
+        if pnl_pct <= -0.50 or pnl_pct >= 1.00:
+            pnl_status = 'sell'
+        elif pnl_pct >= 0.50:
+            pnl_status = 'trim'
+
+        pct_str = f"{pnl_pct * 100:+.0f}%"
+        if pnl_pct >= 1.00:
+            reasons.append(f"{pct_str} — profit target hit")
+        elif pnl_pct <= -0.50:
+            reasons.append(f"{pct_str} — stop loss hit")
+        elif pnl_pct >= 0.50:
+            reasons.append(f"{pct_str} — lock partial")
+
+    # ── Most-severe-wins ──
+    status = cond_status if severity[cond_status] >= severity[pnl_status] else pnl_status
+
+    return {'status': status, 'reasons': reasons, 'pnl_pct': pnl_pct}
+
+
 def _active_smc_labels(row: dict, keys: list) -> str:
     label_map = {
         'smc_bos_bullish':     'BoS Bullish',
