@@ -20,26 +20,31 @@ class PositionsConfigError(Exception):
     """Raised when Google Sheets credentials/secrets are not configured."""
 
 
+@st.cache_resource(show_spinner=False)
+def _get_client():
+    """Authorize the service account (cached — OAuth runs once per session)."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ['https://www.googleapis.com/auth/spreadsheets']
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets['gcp_service_account']), scopes=scopes
+    )
+    return gspread.authorize(creds)
+
+
 def get_worksheet():
-    """Authorize the service account and return the positions worksheet.
+    """Return the positions worksheet, authorizing via a cached client.
 
     Raises PositionsConfigError if secrets are missing or libs unavailable.
     """
     if 'gcp_service_account' not in st.secrets or 'positions_sheet_key' not in st.secrets:
         raise PositionsConfigError("Missing Google Sheets secrets")
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
+        client = _get_client()
     except ImportError as exc:
         raise PositionsConfigError("gspread/google-auth not installed") from exc
-
-    scopes = ['https://www.googleapis.com/auth/spreadsheets']
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets['gcp_service_account']), scopes=scopes
-    )
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(st.secrets['positions_sheet_key'])
-    return sheet.sheet1
+    return client.open_by_key(st.secrets['positions_sheet_key']).sheet1
 
 
 def load_positions() -> list:
@@ -63,13 +68,17 @@ def load_positions() -> list:
 def add_position(pos: dict) -> None:
     """Append a position row, auto-filling id and entry_date when absent."""
     ws = get_worksheet()
-    pid = pos.get('id') or str(uuid.uuid4())
-    entry_date = pos.get('entry_date') or date.today().isoformat()
-    row = [
-        pid, pos['ticker'], pos['strategy'], pos['strike'], pos['expiry'],
-        pos['entry_premium'], pos['contracts'], entry_date,
-    ]
-    ws.append_row(row)
+    record = {
+        'id': pos.get('id') or str(uuid.uuid4()),
+        'ticker': pos['ticker'],
+        'strategy': pos['strategy'],
+        'strike': pos['strike'],
+        'expiry': pos['expiry'],
+        'entry_premium': pos['entry_premium'],
+        'contracts': pos['contracts'],
+        'entry_date': pos.get('entry_date') or date.today().isoformat(),
+    }
+    ws.append_row([record[col] for col in HEADER])
 
 
 def delete_position(position_id: str) -> None:

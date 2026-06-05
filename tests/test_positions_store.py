@@ -44,6 +44,20 @@ def test_load_positions_types_fields(monkeypatch):
     assert isinstance(p['contracts'], int) and p['contracts'] == 2
 
 
+def test_load_positions_handles_numeric_inputs(monkeypatch):
+    # gspread returns native int/float for numeric cells, not strings
+    ws = FakeWorksheet([{
+        'id': 'a1', 'ticker': 'AAPL', 'strategy': 'Long Call',
+        'strike': 150, 'expiry': '2026-07-17', 'entry_premium': 4.2,
+        'contracts': 2, 'entry_date': '2026-06-05',
+    }])
+    _patch_ws(monkeypatch, ws)
+    p = load_positions()[0]
+    assert isinstance(p['strike'], float) and p['strike'] == 150.0
+    assert isinstance(p['entry_premium'], float) and p['entry_premium'] == 4.2
+    assert isinstance(p['contracts'], int) and p['contracts'] == 2
+
+
 def test_load_positions_empty(monkeypatch):
     _patch_ws(monkeypatch, FakeWorksheet([]))
     assert load_positions() == []
