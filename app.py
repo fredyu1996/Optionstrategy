@@ -23,7 +23,7 @@ from screener import (
 )
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
 from chatbot import render_chat_button
-from signals import compute_entry_readiness, compute_exit_rules
+from signals import compute_entry_readiness, compute_exit_rules, compute_sell_verdict
 
 
 @st.cache_data(ttl=3600)
@@ -364,9 +364,15 @@ _PLAYBOOK_STATUS = {
     'not_yet': ('🔴', 'Not Yet',               '#ef4444'),
 }
 
+_PLAYBOOK_VERDICT = {
+    'hold': ('🟢', 'HOLD', '#10b981'),
+    'trim': ('🟡', 'TRIM', '#f59e0b'),
+    'sell': ('🔴', 'SELL', '#ef4444'),
+}
 
-def _render_playbook_col(readiness: dict, exits: dict, strategy_label: str) -> None:
-    """Render entry readiness + exit rules for one strategy column in the Playbook tab."""
+
+def _render_playbook_col(readiness: dict, exits: dict, rec: dict, strategy_label: str, key_prefix: str) -> None:
+    """Render entry readiness, sell verdict, and exit rules for one strategy column."""
     emoji, status_text, status_color = _PLAYBOOK_STATUS[readiness['status']]
     met = readiness['met']
     total = readiness['total']
@@ -407,6 +413,49 @@ def _render_playbook_col(readiness: dict, exits: dict, strategy_label: str) -> N
     st.markdown(
         '<div style="font-size:0.78rem;color:#94a3b8;font-weight:700;'
         'margin-bottom:0.4rem;">EXIT RULES</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Sell verdict badge (rendered above the input via a placeholder) ──
+    verdict_slot = st.empty()
+    entry_premium = st.number_input(
+        "Your entry premium ($, per contract)",
+        min_value=0.0, value=0.0, step=1.0,
+        key=f"{key_prefix}_entry_prem",
+        help="Total $ you paid per contract. Leave 0 to judge by conditions only.",
+    )
+    ep = entry_premium if entry_premium > 0 else None
+    verdict = compute_sell_verdict(exits, rec, ep)
+    v_emoji, v_text, v_color = _PLAYBOOK_VERDICT[verdict['status']]
+
+    pnl_html = ''
+    if verdict['pnl_pct'] is not None:
+        pnl = verdict['pnl_pct']
+        pnl_color = '#10b981' if pnl >= 0 else '#ef4444'
+        pnl_html = (
+            f'<div style="font-size:0.8rem;margin-top:0.2rem;color:{pnl_color};'
+            f'font-weight:600;">Current P/L: {pnl * 100:+.0f}%</div>'
+        )
+
+    if verdict['reasons']:
+        reasons_html = ''.join(
+            f'<div style="font-size:0.74rem;color:#94a3b8;margin-top:0.12rem;">• {r}</div>'
+            for r in verdict['reasons']
+        )
+    else:
+        reasons_html = (
+            '<div style="font-size:0.74rem;color:#64748b;margin-top:0.12rem;">'
+            'No exit signals active</div>'
+        )
+
+    verdict_slot.markdown(
+        f'<div style="background:#0f172a;border:1px solid {v_color}55;'
+        f'border-left:4px solid {v_color};border-radius:0.5rem;'
+        f'padding:0.6rem 0.9rem;margin-bottom:0.6rem;">'
+        f'<div style="font-size:1.25rem;font-weight:800;color:{v_color};">'
+        f'{v_emoji} {v_text}</div>'
+        f'{pnl_html}{reasons_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -1303,9 +1352,9 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
 
             col_lc, col_lp = st.columns(2)
             with col_lc:
-                _render_playbook_col(readiness_lc, exits_lc, '📈 Long Call')
+                _render_playbook_col(readiness_lc, exits_lc, rec_lc, '📈 Long Call', f"pb_{ticker_str}_lc")
             with col_lp:
-                _render_playbook_col(readiness_lp, exits_lp, '📉 Long Put')
+                _render_playbook_col(readiness_lp, exits_lp, rec_lp, '📉 Long Put', f"pb_{ticker_str}_lp")
 
 
 # ──────────────────────────────────────────────
