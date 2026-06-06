@@ -66,22 +66,46 @@ def _days_to_expiry(expiry_iso: str) -> int:
     return (exp - date.today()).days
 
 
+_STRATEGIES = {'long call': 'Long Call', 'long put': 'Long Put'}
+
+
+def _normalize_strategy(value):
+    """Map a stored strategy to canonical 'Long Call'/'Long Put' (tolerating
+    whitespace and case). Returns None if unrecognized."""
+    if value is None:
+        return None
+    return _STRATEGIES.get(str(value).strip().lower())
+
+
+def _error_result(dte, message: str) -> dict:
+    """A safe analyze_position result for a row we cannot evaluate."""
+    return {
+        'current_price': float('nan'),
+        'pnl_pct': None,
+        'pnl_usd': None,
+        'dte': dte,
+        'verdict': {'status': 'hold', 'reasons': [], 'pnl_pct': None},
+        'error': message,
+    }
+
+
 def analyze_position(pos: dict) -> dict:
     """Compute live price, P/L, DTE, and SELL/TRIM/HOLD verdict for a position."""
     ticker = pos['ticker']
-    strategy = pos['strategy']
+    strategy = _normalize_strategy(pos.get('strategy'))
     strike = pos['strike']
     expiry = pos['expiry']
-    entry = pos['entry_premium']
+    entry = pos.get('entry_premium', 0)
     contracts = int(pos.get('contracts', 1) or 1)
 
     expiry_iso = _normalize_expiry(expiry)
-    if expiry_iso is None:
-        dte = None
-        current = float('nan')
-    else:
-        dte = _days_to_expiry(expiry_iso)
-        current = get_contract_price(ticker, strategy, strike, expiry_iso)
+    dte = _days_to_expiry(expiry_iso) if expiry_iso else None
+
+    if strategy is None:
+        return _error_result(dte, f"Unknown strategy: {pos.get('strategy')!r}")
+
+    current = (get_contract_price(ticker, strategy, strike, expiry_iso)
+               if expiry_iso else float('nan'))
 
     row = {}
     error = None

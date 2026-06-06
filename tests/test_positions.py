@@ -71,6 +71,23 @@ def test_dte_computed_from_expiry(monkeypatch):
     assert data['dte'] == 30
 
 
+def test_unknown_strategy_returns_error_not_raise(monkeypatch):
+    _patch(monkeypatch, price=5.0)
+    data = analyze_position(_pos(strategy='Iron Condor'))
+    assert data['error'] is not None
+    assert data['verdict']['status'] == 'hold'
+    assert data['pnl_usd'] is None
+
+
+def test_strategy_normalized_whitespace_and_case(monkeypatch):
+    # ' long call ' must normalize to 'Long Call' and follow the normal path
+    # (pnl computed), not the unknown-strategy error path (which yields None pnl).
+    _patch(monkeypatch, price=6.0)
+    data = analyze_position(_pos(strategy=' long call '))
+    assert data['pnl_usd'] == pytest.approx(400.0)
+    assert not str(data['error']).startswith('Unknown strategy')
+
+
 def test_normalize_expiry_variants():
     assert _normalize_expiry('2026-07-17') == '2026-07-17'
     assert _normalize_expiry('7/17/2026') == '2026-07-17'  # Sheets M/D/YYYY reformat

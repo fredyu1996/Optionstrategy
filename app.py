@@ -547,7 +547,14 @@ def render_positions_page():
 
     for pos in positions:
         with st.spinner(f"Analyzing {pos['ticker']}…"):
-            data = analyze_position(pos)
+            try:
+                data = analyze_position(pos)
+            except Exception as exc:  # one bad row must not kill the page
+                st.error(f"Could not analyze {pos.get('ticker', '?')}: {exc}")
+                if st.button("Close position", key=f"close_{pos['id']}"):
+                    delete_position(pos['id'])
+                    st.rerun()
+                continue
 
         v_emoji, v_text, v_color = _PLAYBOOK_VERDICT[data['verdict']['status']]
         price_str = (f"${data['current_price']:.2f}"
