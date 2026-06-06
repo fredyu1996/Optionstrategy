@@ -6,7 +6,26 @@ import pandas as pd
 import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import positions
-from positions import analyze_position
+from positions import analyze_position, _fetch_contract_price
+
+
+class _FakeChain:
+    def __init__(self, calls, puts):
+        self.calls = calls
+        self.puts = puts
+
+
+class _FakeTicker:
+    def __init__(self, calls, puts):
+        self._chain = _FakeChain(calls, puts)
+
+    def option_chain(self, expiry):
+        return self._chain
+
+
+def _patch_chain(monkeypatch, calls, puts=None):
+    puts = puts if puts is not None else pd.DataFrame()
+    monkeypatch.setattr(positions.yf, 'Ticker', lambda t: _FakeTicker(calls, puts))
 
 
 def _pos(**over):
@@ -58,3 +77,46 @@ def test_result_has_required_keys(monkeypatch):
     assert set(data.keys()) == {
         'current_price', 'pnl_pct', 'pnl_usd', 'dte', 'verdict', 'error',
     }
+
+
+# ── _fetch_contract_price ──────────────────────────────────────────────────────
+
+def test_fetch_contract_price_uses_bid_ask_mid(monkeypatch):
+    calls = pd.DataFrame([{'strike': 150.0, 'bid': 4.0, 'ask': 5.0, 'lastPrice': 4.2}])
+    _patch_chain(monkeypatch, calls)
+    assert _fetch_contract_price('AAPL', 'Long Call', 150.0, '2026-07-17') == pytest.approx(4.5)
+
+
+def test_fetch_contract_price_falls_back_to_last(monkeypatch):
+    # no bid/ask -> use lastPrice
+    calls = pd.DataFrame([{'strike': 150.0, 'bid': 0.0, 'ask': 0.0, 'lastPrice': 4.2}])
+    _patch_chain(monkeypatch, calls)
+    assert _fetch_contract_price('AAPL', 'Long Call', 150.0, '2026-07-17') == pytest.approx(4.2)
+
+
+def test_fetch_contract_price_strike_not_found_returns_nan(monkeypatch):
+    calls = pd.DataFrame([{'strike': 155.0, 'bid': 4.0, 'ask': 5.0, 'lastPrice': 4.2}])
+    _patch_chain(monkeypatch, calls)
+    assert np.isnan(_fetch_contract_price('AAPL', 'Long Call', 150.0, '2026-07-17'))
+
+
+def test_fetch_contract_price_uses_puts_for_long_put(monkeypatch):
+    calls = pd.DataFrame([{'strike': 150.0, 'bid': 9.0, 'ask': 9.0, 'lastPrice': 9.0}])
+    puts = pd.DataFrame([{'strike': 150.0, 'bid': 3.0, 'ask': 5.0, 'lastPrice': 4.0}])
+    _patch_chain(monkeypatch, calls, puts)
+    assert _fetch_contract_price('AAPL', 'Long Put', 150.0, '2026-07-17') == pytest.approx(4.0)
+
+
+def test_analyze_runs_signal_path_with_real_ohlcv(monkeypatch):
+    # >=20 rows of OHLCV exercises the rsi + SMC remap branch (no error set there)
+    n = 30
+    rng = np.linspace(100, 130, n)
+    hist = pd.DataFrame({
+        'Open': rng, 'High': rng + 1, 'Low': rng - 1, 'Close': rng,
+    })
+    monkeypatch.setattr(positions, 'get_contract_price', lambda *a, **k: 5.0)
+    monkeypatch.setattr(positions, '_get_history', lambda ticker: hist)
+    data = analyze_position(_pos())
+    # signal path ran (no 'signal data unavailable'); verdict produced
+    assert data['error'] is None
+    assert data['verdict']['status'] in {'hold', 'trim', 'sell'}

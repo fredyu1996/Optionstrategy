@@ -9,14 +9,18 @@ call and P/L for each stored position.
 from datetime import datetime, date
 
 import numpy as np
+import streamlit as st
 import yfinance as yf
 
 from screener import _compute_rsi, compute_smc_signals
 from signals import compute_exit_rules, compute_sell_verdict
 
 
-def get_contract_price(ticker: str, strategy: str, strike: float, expiry: str) -> float:
-    """Live per-share mid for the exact contract, or np.nan if unavailable."""
+def _fetch_contract_price(ticker: str, strategy: str, strike: float, expiry: str) -> float:
+    """Live per-share mid for the exact contract, or np.nan if unavailable.
+
+    Uncached core logic; tested directly. Use get_contract_price in the app.
+    """
     try:
         t = yf.Ticker(ticker)
         chain = t.option_chain(expiry)
@@ -35,8 +39,15 @@ def get_contract_price(ticker: str, strategy: str, strike: float, expiry: str) -
         return float('nan')
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def get_contract_price(ticker: str, strategy: str, strike: float, expiry: str) -> float:
+    """Cached wrapper around _fetch_contract_price (2 min TTL for live quotes)."""
+    return _fetch_contract_price(ticker, strategy, strike, expiry)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
 def _get_history(ticker: str):
-    """Download ~3 months of OHLCV. Separated for test mocking."""
+    """Download ~3 months of OHLCV (15 min TTL). Separated for test mocking."""
     return yf.Ticker(ticker).history(period='3mo')
 
 
