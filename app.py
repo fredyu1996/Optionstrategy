@@ -24,6 +24,8 @@ from screener import (
 from strategies import suggest_strategies, get_specific_contracts, get_option_chain_display
 from chatbot import render_chat_button
 from signals import compute_entry_readiness, compute_exit_rules, compute_sell_verdict
+from positions_store import load_positions, add_position, delete_position, PositionsConfigError
+from positions import analyze_position
 
 
 @st.cache_data(ttl=3600)
@@ -497,6 +499,96 @@ def _render_playbook_col(readiness: dict, exits: dict, rec: dict, strategy_label
         )
 
 
+def render_positions_page():
+    """Render the My Positions view: add form + live position cards."""
+    st.markdown('<div class="section-header">📋 My Positions</div>', unsafe_allow_html=True)
+
+    try:
+        positions = load_positions()
+    except PositionsConfigError:
+        st.warning(
+            "Google Sheets is not configured. Add `positions_sheet_key` and "
+            "a `[gcp_service_account]` block to your Streamlit secrets. "
+            "See the README → **Position Tracking Setup**."
+        )
+        return
+
+    with st.expander("➕ Add a position", expanded=not positions):
+        with st.form("add_position_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ticker = st.text_input("Ticker").strip().upper()
+                strategy = st.selectbox("Type", ["Long Call", "Long Put"])
+            with c2:
+                strike = st.number_input("Strike", min_value=0.0, step=1.0)
+                expiry = st.date_input("Expiry")
+            with c3:
+                entry_premium = st.number_input("Entry premium ($/share)", min_value=0.0, step=0.05)
+                contracts = st.number_input("Contracts", min_value=1, step=1, value=1)
+            submitted = st.form_submit_button("Add", type="primary")
+            if submitted:
+                if not ticker or strike <= 0 or entry_premium <= 0:
+                    st.error("Ticker, strike, and entry premium are required.")
+                else:
+                    add_position({
+                        'ticker': ticker,
+                        'strategy': strategy,
+                        'strike': float(strike),
+                        'expiry': expiry.isoformat(),
+                        'entry_premium': float(entry_premium),
+                        'contracts': int(contracts),
+                    })
+                    st.success(f"Added {ticker} ${strike:.0f} {strategy}.")
+                    st.rerun()
+
+    if not positions:
+        st.info("No open positions. Add one above.")
+        return
+
+    for pos in positions:
+        with st.spinner(f"Analyzing {pos['ticker']}…"):
+            data = analyze_position(pos)
+
+        v_emoji, v_text, v_color = _PLAYBOOK_VERDICT[data['verdict']['status']]
+        price_str = (f"${data['current_price']:.2f}"
+                     if not np.isnan(data['current_price']) else "n/a")
+
+        if data['pnl_usd'] is not None and data['pnl_pct'] is not None:
+            pnl_color = '#10b981' if data['pnl_usd'] >= 0 else '#ef4444'
+            pnl_str = (f'<span style="color:{pnl_color};font-weight:700;">'
+                       f'{data["pnl_pct"] * 100:+.0f}% (${data["pnl_usd"]:+.0f})</span>')
+        else:
+            pnl_str = '<span style="color:#64748b;">P/L n/a</span>'
+
+        reasons_html = ''.join(
+            f'<div style="font-size:0.74rem;color:#94a3b8;">• {r}</div>'
+            for r in data['verdict']['reasons']
+        ) or '<div style="font-size:0.74rem;color:#64748b;">No exit signals active</div>'
+
+        err_html = (f'<div style="font-size:0.72rem;color:#f59e0b;">⚠ {data["error"]}</div>'
+                    if data['error'] else '')
+
+        st.markdown(
+            f'<div style="background:#1e293b;border:1px solid {v_color}55;'
+            f'border-left:4px solid {v_color};border-radius:0.5rem;'
+            f'padding:0.75rem 1rem;margin:0.5rem 0;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div style="font-size:1.0rem;font-weight:700;color:#e2e8f0;">'
+            f'{pos["ticker"]} ${pos["strike"]:.0f} {pos["strategy"]} · exp {pos["expiry"]}</div>'
+            f'<div style="font-size:1.1rem;font-weight:800;color:{v_color};">{v_emoji} {v_text}</div>'
+            f'</div>'
+            f'<div style="font-size:0.82rem;color:#cbd5e1;margin-top:0.3rem;">'
+            f'{pos["contracts"]}x · entry ${pos["entry_premium"]:.2f} · now {price_str} · '
+            f'{data["dte"]} DTE · {pnl_str}</div>'
+            f'{reasons_html}{err_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Close position", key=f"close_{pos['id']}"):
+            delete_position(pos['id'])
+            st.rerun()
+
+
 # ──────────────────────────────────────────────
 # VIX Chart
 # ──────────────────────────────────────────────
@@ -644,6 +736,8 @@ sp500_df = st.session_state.sp500_df
 # Sidebar
 # ──────────────────────────────────────────────
 with st.sidebar:
+    view = st.radio("View", ["🔍 Screener", "📋 My Positions"], key="view_nav")
+    st.markdown("---")
     st.markdown("## ⚙️ Screener Settings")
     st.markdown("---")
 
@@ -731,6 +825,14 @@ with st.sidebar:
     st.markdown("- S&P 500 list: Wikipedia")
     st.markdown("- Macro: Yahoo Finance")
     st.markdown(f"\n*Last refreshed: {datetime.now().strftime('%H:%M:%S')}*")
+
+
+# ──────────────────────────────────────────────
+# Top-level view routing
+# ──────────────────────────────────────────────
+if view == "📋 My Positions":
+    render_positions_page()
+    st.stop()
 
 
 # ──────────────────────────────────────────────
