@@ -9,6 +9,7 @@ call and P/L for each stored position.
 from datetime import datetime, date
 
 import numpy as np
+import pandas as pd
 import streamlit as st
 import yfinance as yf
 
@@ -51,8 +52,17 @@ def _get_history(ticker: str):
     return yf.Ticker(ticker).history(period='3mo')
 
 
-def _days_to_expiry(expiry: str) -> int:
-    exp = datetime.strptime(expiry, '%Y-%m-%d').date()
+def _normalize_expiry(expiry: str):
+    """Coerce any stored expiry (Google Sheets may reformat dates) to ISO
+    'YYYY-MM-DD'. Returns None if unparseable."""
+    ts = pd.to_datetime(expiry, errors='coerce')
+    if pd.isna(ts):
+        return None
+    return ts.strftime('%Y-%m-%d')
+
+
+def _days_to_expiry(expiry_iso: str) -> int:
+    exp = datetime.strptime(expiry_iso, '%Y-%m-%d').date()
     return (exp - date.today()).days
 
 
@@ -65,8 +75,13 @@ def analyze_position(pos: dict) -> dict:
     entry = pos['entry_premium']
     contracts = int(pos.get('contracts', 1) or 1)
 
-    dte = _days_to_expiry(expiry)
-    current = get_contract_price(ticker, strategy, strike, expiry)
+    expiry_iso = _normalize_expiry(expiry)
+    if expiry_iso is None:
+        dte = None
+        current = float('nan')
+    else:
+        dte = _days_to_expiry(expiry_iso)
+        current = get_contract_price(ticker, strategy, strike, expiry_iso)
 
     row = {}
     error = None

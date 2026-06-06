@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import positions
-from positions import analyze_position, _fetch_contract_price
+from positions import analyze_position, _fetch_contract_price, _normalize_expiry
 
 
 class _FakeChain:
@@ -69,6 +69,41 @@ def test_dte_computed_from_expiry(monkeypatch):
     _patch(monkeypatch, price=5.0)
     data = analyze_position(_pos(expiry=(date.today() + timedelta(days=30)).isoformat()))
     assert data['dte'] == 30
+
+
+def test_normalize_expiry_variants():
+    assert _normalize_expiry('2026-07-17') == '2026-07-17'
+    assert _normalize_expiry('7/17/2026') == '2026-07-17'  # Sheets M/D/YYYY reformat
+    assert _normalize_expiry('garbage') is None
+
+
+def test_analyze_handles_sheets_reformatted_date(monkeypatch):
+    # Google Sheets reformats ISO dates to M/D/YYYY on round-trip — must not crash
+    _patch(monkeypatch, price=5.0)
+    fut = date.today() + timedelta(days=30)
+    sheets_fmt = f"{fut.month}/{fut.day}/{fut.year}"
+    data = analyze_position(_pos(expiry=sheets_fmt))
+    assert data['dte'] == 30
+
+
+def test_expiry_normalized_to_iso_for_price_fetch(monkeypatch):
+    captured = {}
+
+    def fake_price(ticker, strategy, strike, expiry):
+        captured['expiry'] = expiry
+        return 5.0
+
+    monkeypatch.setattr(positions, 'get_contract_price', fake_price)
+    monkeypatch.setattr(positions, '_get_history', lambda t: pd.DataFrame())
+    analyze_position(_pos(expiry='7/17/2026'))
+    assert captured['expiry'] == '2026-07-17'  # yfinance requires ISO
+
+
+def test_unparseable_expiry_sets_nan_price(monkeypatch):
+    _patch(monkeypatch, price=5.0)  # price fn won't be called for bad expiry
+    data = analyze_position(_pos(expiry='not-a-date'))
+    assert data['dte'] is None
+    assert np.isnan(data['current_price'])
 
 
 def test_result_has_required_keys(monkeypatch):
