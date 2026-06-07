@@ -190,6 +190,16 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
                 'triggered': bool(row.get('smc_premium_zone')),
                 'current_value': 'active' if row.get('smc_premium_zone') else 'not active',
             },
+            {
+                'label': '穿 EMA20',
+                'triggered': not bool(row.get('above_ema20', True)),
+                'current_value': 'below' if not row.get('above_ema20', True) else 'above',
+            },
+            {
+                'label': '穿 EMA50',
+                'triggered': not bool(row.get('above_ema50', True)),
+                'current_value': 'below' if not row.get('above_ema50', True) else 'above',
+            },
         ]
     else:
         tech_triggers = [
@@ -207,6 +217,16 @@ def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
                 'label': 'Price enters Discount Zone',
                 'triggered': bool(row.get('smc_discount_zone')),
                 'current_value': 'active' if row.get('smc_discount_zone') else 'not active',
+            },
+            {
+                'label': '升穿 EMA20',
+                'triggered': bool(row.get('above_ema20', False)),
+                'current_value': 'above' if row.get('above_ema20', False) else 'below',
+            },
+            {
+                'label': '升穿 EMA50',
+                'triggered': bool(row.get('above_ema50', False)),
+                'current_value': 'above' if row.get('above_ema50', False) else 'below',
             },
         ]
 

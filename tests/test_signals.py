@@ -195,13 +195,49 @@ class TestExitRules:
         assert np.isnan(result['take_profit_usd'])
         assert np.isnan(result['stop_loss_usd'])
 
-    def test_long_call_has_three_tech_triggers(self):
+    def test_long_call_has_five_tech_triggers(self):
         result = compute_exit_rules(_bullish_row(), 'Long Call', _base_rec())
-        assert len(result['tech_triggers']) == 3
+        assert len(result['tech_triggers']) == 5
 
-    def test_long_put_has_three_tech_triggers(self):
+    def test_long_put_has_five_tech_triggers(self):
         result = compute_exit_rules(_bearish_row(), 'Long Put', _base_rec())
-        assert len(result['tech_triggers']) == 3
+        assert len(result['tech_triggers']) == 5
+
+    def test_long_call_break_ema20_triggers(self):
+        row = _bullish_row()
+        row['above_ema20'] = False
+        result = compute_exit_rules(row, 'Long Call', _base_rec())
+        ema20 = next(t for t in result['tech_triggers'] if 'EMA20' in t['label'])
+        assert ema20['triggered'] is True
+
+    def test_long_call_break_ema50_triggers(self):
+        row = _bullish_row()
+        row['above_ema50'] = False
+        result = compute_exit_rules(row, 'Long Call', _base_rec())
+        ema50 = next(t for t in result['tech_triggers'] if 'EMA50' in t['label'])
+        assert ema50['triggered'] is True
+
+    def test_break_ema20_only_is_trim_via_verdict(self):
+        row = _bullish_row()
+        row['above_ema20'] = False
+        exits = compute_exit_rules(row, 'Long Call', _base_rec())
+        verdict = compute_sell_verdict(exits, _base_rec())
+        assert verdict['status'] == 'trim'
+
+    def test_break_ema20_and_ema50_is_sell_via_verdict(self):
+        row = _bullish_row()
+        row['above_ema20'] = False
+        row['above_ema50'] = False
+        exits = compute_exit_rules(row, 'Long Call', _base_rec())
+        verdict = compute_sell_verdict(exits, _base_rec())
+        assert verdict['status'] == 'sell'
+
+    def test_long_put_break_up_ema20_triggers(self):
+        row = _bearish_row()
+        row['above_ema20'] = True
+        result = compute_exit_rules(row, 'Long Put', _base_rec())
+        ema20 = next(t for t in result['tech_triggers'] if 'EMA20' in t['label'])
+        assert ema20['triggered'] is True
 
     def test_long_call_rsi_trigger_fires_above_70(self):
         row = _bullish_row()
