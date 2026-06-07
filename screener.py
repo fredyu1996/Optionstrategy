@@ -10,6 +10,8 @@ import warnings
 import math
 import streamlit as st
 
+from indicators import compute_ema_signals
+
 warnings.filterwarnings('ignore')
 
 # Fallback S&P 500 tickers (top 50 by market cap) if Wikipedia fetch fails
@@ -798,6 +800,13 @@ def batch_screen_fundamentals(tickers: list) -> pd.DataFrame:
                 row['trend'] = 'Strong Down' if not np.isnan(row.get('ret_1m', np.nan)) and row.get('ret_1m', 0) < -5 else 'Down'
             else:
                 row['trend'] = 'Sideways'
+
+            # EMA signals (daily)
+            _ema = compute_ema_signals(close_series)
+            row['ema_bull_stack'] = _ema['ema_bull_stack']
+            row['ema_bear_stack'] = _ema['ema_bear_stack']
+            row['above_ema20'] = _ema['above_ema20']
+            row['above_ema50'] = _ema['above_ema50']
 
             # Fundamentals
             try:
