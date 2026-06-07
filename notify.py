@@ -78,7 +78,7 @@ def main() -> None:
     current = run_exit_scan(sa_info, sheet_key) + run_entry_scan()
 
     state_ws = sheets.open_worksheet(sa_info, sheet_key, 'alert_state')
-    stored = {r['key']: r['state'] for r in sheets.get_records(state_ws) if r.get('key')}
+    stored = {r['key']: r.get('state', '') for r in sheets.get_records(state_ws) if r.get('key')}
 
     to_send = alerts.diff_alerts(current, stored)
     for a in to_send:
