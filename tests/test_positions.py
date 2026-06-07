@@ -44,6 +44,12 @@ def _patch(monkeypatch, price, hist=None):
                         lambda ticker: hist if hist is not None else pd.DataFrame())
 
 
+@pytest.fixture(autouse=True)
+def _stub_4h(monkeypatch):
+    monkeypatch.setattr(positions, 'fetch_4h_ema_status',
+                        lambda t: {'status': 'unknown', 'label': '', 'signals': {}})
+
+
 def test_pnl_usd_uses_100x_multiplier(monkeypatch):
     _patch(monkeypatch, price=6.0)  # +50% on 4.0 entry
     data = analyze_position(_pos())
@@ -127,7 +133,7 @@ def test_result_has_required_keys(monkeypatch):
     _patch(monkeypatch, price=5.0)
     data = analyze_position(_pos())
     assert set(data.keys()) == {
-        'current_price', 'pnl_pct', 'pnl_usd', 'dte', 'verdict', 'error',
+        'current_price', 'pnl_pct', 'pnl_usd', 'dte', 'verdict', 'ema4h', 'error',
     }
 
 
@@ -157,6 +163,28 @@ def test_fetch_contract_price_uses_puts_for_long_put(monkeypatch):
     puts = pd.DataFrame([{'strike': 150.0, 'bid': 3.0, 'ask': 5.0, 'lastPrice': 4.0}])
     _patch_chain(monkeypatch, calls, puts)
     assert _fetch_contract_price('AAPL', 'Long Put', 150.0, '2026-07-17') == pytest.approx(4.0)
+
+
+def test_analyze_includes_ema4h(monkeypatch):
+    monkeypatch.setattr(positions, 'get_contract_price', lambda *a, **k: 5.0)
+    monkeypatch.setattr(positions, '_get_history', lambda t: pd.DataFrame())
+    monkeypatch.setattr(positions, 'fetch_4h_ema_status',
+                        lambda t: {'status': 'good', 'label': '4H: ok', 'signals': {}})
+    data = analyze_position(_pos())
+    assert data['ema4h'] == {'status': 'good', 'label': '4H: ok', 'signals': {}}
+
+
+def test_analyze_adds_daily_ema_flags_to_exit(monkeypatch):
+    n = 70
+    falling = np.linspace(200, 120, n)
+    hist = pd.DataFrame({'Open': falling, 'High': falling + 1,
+                         'Low': falling - 1, 'Close': falling})
+    monkeypatch.setattr(positions, 'get_contract_price', lambda *a, **k: 5.0)
+    monkeypatch.setattr(positions, '_get_history', lambda t: hist)
+    monkeypatch.setattr(positions, 'fetch_4h_ema_status',
+                        lambda t: {'status': 'unknown', 'label': '', 'signals': {}})
+    data = analyze_position(_pos())  # Long Call on a downtrend
+    assert data['verdict']['status'] == 'sell'
 
 
 def test_analyze_runs_signal_path_with_real_ohlcv(monkeypatch):

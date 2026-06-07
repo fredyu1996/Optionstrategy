@@ -14,6 +14,7 @@ import streamlit as st
 import yfinance as yf
 
 from screener import _compute_rsi, compute_smc_signals
+from indicators import compute_ema_signals, fetch_4h_ema_status
 from signals import compute_exit_rules, compute_sell_verdict
 
 
@@ -85,6 +86,7 @@ def _error_result(dte, message: str) -> dict:
         'pnl_usd': None,
         'dte': dte,
         'verdict': {'status': 'hold', 'reasons': [], 'pnl_pct': None},
+        'ema4h': {'status': 'unknown', 'label': '', 'signals': {}},
         'error': message,
     }
 
@@ -115,6 +117,8 @@ def analyze_position(pos: dict) -> dict:
             row['rsi'] = _compute_rsi(hist['Close'])
             for key, val in compute_smc_signals(hist).items():
                 row[f'smc_{key}'] = val
+            for key, val in compute_ema_signals(hist['Close']).items():
+                row[key] = val
         else:
             error = 'signal data unavailable'
     except Exception:
@@ -131,11 +135,14 @@ def analyze_position(pos: dict) -> dict:
     else:
         pnl_usd = (current - entry) * 100 * contracts
 
+    ema4h = fetch_4h_ema_status(ticker)
+
     return {
         'current_price': current,
         'pnl_pct': verdict['pnl_pct'],
         'pnl_usd': pnl_usd,
         'dte': dte,
         'verdict': verdict,
+        'ema4h': ema4h,
         'error': error,
     }
