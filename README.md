@@ -33,3 +33,24 @@ Streamlit Cloud redeploys. One-time setup:
    ```
 
 Until secrets are set, the My Positions view shows a setup prompt instead of crashing.
+## Signal Alerts (Telegram)
+
+A GitHub Actions job (`notify.py`, hourly during US market hours) scans the
+S&P 500 for fresh 🟢 Enter signals and your held positions for TRIM/SELL, then
+sends new signals to Telegram. De-duplicated via an `alert_state` tab in the
+positions sheet (auto-created).
+
+One-time setup:
+
+1. In Telegram, message **@BotFather** → `/newbot` → copy the **bot token**.
+2. Get your **chat id**: message **@userinfobot**, or message your new bot and
+   open `https://api.telegram.org/bot<token>/getUpdates` to read `chat.id`.
+3. In the GitHub repo → **Settings → Secrets and variables → Actions → New
+   repository secret**, add:
+   - `TELEGRAM_BOT_TOKEN` — the bot token
+   - `TELEGRAM_CHAT_ID` — your chat id
+   - `POSITIONS_SHEET_KEY` — the same Google Sheet id used by the app
+   - `GCP_SERVICE_ACCOUNT` — the full service-account JSON (paste as the value)
+4. The service account already shares the sheet; the `alert_state` tab is created
+   automatically on the first run.
+5. Trigger a manual test: repo → **Actions → Signal Alerts → Run workflow**.

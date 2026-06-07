@@ -1,0 +1,22 @@
+name: Signal Alerts
+
+on:
+  schedule:
+    - cron: '0 13-21 * * 1-5'   # hourly, ~US market hours (UTC), Mon-Fri
+  workflow_dispatch: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python notify.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          POSITIONS_SHEET_KEY: ${{ secrets.POSITIONS_SHEET_KEY }}
