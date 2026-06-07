@@ -61,7 +61,8 @@ def run_entry_scan() -> list:
         from screener import (
             get_sp500_tickers, batch_screen_fundamentals, enrich_with_iv,
         )
-        tickers = get_sp500_tickers()
+        sp500 = get_sp500_tickers()
+        tickers = sp500['ticker'].tolist()  # get_sp500_tickers returns a DataFrame
         df = batch_screen_fundamentals(tickers)
         df = enrich_with_iv(df)
         rows = df.to_dict('records')
