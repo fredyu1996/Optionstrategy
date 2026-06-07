@@ -26,6 +26,7 @@ from chatbot import render_chat_button
 from signals import compute_entry_readiness, compute_exit_rules, compute_sell_verdict
 from positions_store import load_positions, add_position, delete_position, PositionsConfigError
 from positions import analyze_position
+from indicators import fetch_4h_ema_status
 
 
 @st.cache_data(ttl=3600)
@@ -372,6 +373,13 @@ _PLAYBOOK_VERDICT = {
     'sell': ('🔴', 'SELL', '#ef4444'),
 }
 
+_EMA4H_COLOR = {
+    'good': '#10b981',
+    'wait': '#f59e0b',
+    'avoid': '#ef4444',
+    'unknown': '#64748b',
+}
+
 
 def _render_playbook_col(readiness: dict, exits: dict, rec: dict, strategy_label: str, key_prefix: str) -> None:
     """Render entry readiness, sell verdict, and exit rules for one strategy column."""
@@ -574,6 +582,10 @@ def render_positions_page():
 
         err_html = (f'<div style="font-size:0.72rem;color:#f59e0b;">⚠ {data["error"]}</div>'
                     if data['error'] else '')
+        ema4h = data.get('ema4h') or {'status': 'unknown', 'label': ''}
+        ema_color = _EMA4H_COLOR.get(ema4h['status'], '#64748b')
+        ema_html = (f'<div style="font-size:0.76rem;color:{ema_color};margin-top:0.15rem;">'
+                    f'{ema4h["label"]}</div>' if ema4h.get('label') else '')
 
         st.markdown(
             f'<div style="background:#1e293b;border:1px solid {v_color}55;'
@@ -587,7 +599,7 @@ def render_positions_page():
             f'<div style="font-size:0.82rem;color:#cbd5e1;margin-top:0.3rem;">'
             f'{pos["contracts"]}x · entry ${pos["entry_premium"]:.2f} · now {price_str} · '
             f'{data["dte"]} DTE · {pnl_str}</div>'
-            f'{reasons_html}{err_html}'
+            f'{ema_html}{reasons_html}{err_html}'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1458,6 +1470,15 @@ if st.session_state.selected_ticker and st.session_state.screening_results is no
             readiness_lp = compute_entry_readiness(row, 'Long Put')
             exits_lc = compute_exit_rules(row, 'Long Call', rec_lc)
             exits_lp = compute_exit_rules(row, 'Long Put', rec_lp)
+
+            _ema4h = fetch_4h_ema_status(ticker_str)
+            _ema_color = _EMA4H_COLOR.get(_ema4h['status'], '#64748b')
+            if _ema4h.get('label'):
+                st.markdown(
+                    f'<div style="font-size:0.85rem;font-weight:600;color:{_ema_color};'
+                    f'margin:0.3rem 0 0.6rem;">{_ema4h["label"]}</div>',
+                    unsafe_allow_html=True,
+                )
 
             col_lc, col_lp = st.columns(2)
             with col_lc:
