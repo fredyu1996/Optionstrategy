@@ -23,6 +23,10 @@ def _bullish_row():
         'smc_near_bearish_ob': False,
         'smc_in_bullish_fvg': False,
         'smc_in_bearish_fvg': False,
+        'ema_bull_stack': True,
+        'ema_bear_stack': False,
+        'above_ema20': True,
+        'above_ema50': True,
     }
 
 
@@ -42,6 +46,10 @@ def _bearish_row():
         'smc_near_bearish_ob': False,
         'smc_in_bullish_fvg': False,
         'smc_in_bearish_fvg': False,
+        'ema_bull_stack': False,
+        'ema_bear_stack': True,
+        'above_ema20': False,
+        'above_ema50': False,
     }
 
 
@@ -54,33 +62,32 @@ def _base_rec():
 class TestEntryReadinessLongCall:
     def test_all_pass_returns_enter(self):
         result = compute_entry_readiness(_bullish_row(), 'Long Call')
-        assert result['met'] == 6
-        assert result['total'] == 6
+        assert result['met'] == 7
+        assert result['total'] == 7
         assert result['status'] == 'enter'
 
-    def test_three_pass_returns_wait(self):
+    def test_four_pass_returns_wait(self):
         row = _bullish_row()
         row['trend'] = 'Down'
         row['smc_discount_zone'] = False
         row['smc_bos_bullish'] = False
         result = compute_entry_readiness(row, 'Long Call')
-        assert result['met'] == 3
+        assert result['met'] == 4
         assert result['status'] == 'wait'
 
-    def test_two_or_fewer_returns_not_yet(self):
+    def test_three_pass_returns_not_yet(self):
         row = _bullish_row()
-        row['trend'] = 'Strong Down'
-        row['rsi'] = 72.0
+        row['trend'] = 'Down'
         row['smc_discount_zone'] = False
         row['smc_bos_bullish'] = False
-        row['iv_hv_ratio'] = 1.5
+        row['ema_bull_stack'] = False
         result = compute_entry_readiness(row, 'Long Call')
-        assert result['met'] <= 2
+        assert result['met'] == 3
         assert result['status'] == 'not_yet'
 
-    def test_returns_six_checks(self):
+    def test_returns_seven_checks(self):
         result = compute_entry_readiness(_bullish_row(), 'Long Call')
-        assert len(result['checks']) == 6
+        assert len(result['checks']) == 7
 
     def test_nan_rsi_fails_rsi_check(self):
         row = _bullish_row()
@@ -120,11 +127,23 @@ class TestEntryReadinessLongCall:
         assert earn_check['passed'] is True
         assert earn_check['value'] == 'none'
 
+    def test_ema_check_present_and_passes(self):
+        result = compute_entry_readiness(_bullish_row(), 'Long Call')
+        ema_check = next(c for c in result['checks'] if 'EMA' in c['label'])
+        assert ema_check['passed']
+
+    def test_ema_check_fails_when_below_ema20(self):
+        row = _bullish_row()
+        row['above_ema20'] = False
+        result = compute_entry_readiness(row, 'Long Call')
+        ema_check = next(c for c in result['checks'] if 'EMA' in c['label'])
+        assert not ema_check['passed']
+
 
 class TestEntryReadinessLongPut:
     def test_all_pass_returns_enter(self):
         result = compute_entry_readiness(_bearish_row(), 'Long Put')
-        assert result['met'] == 6
+        assert result['met'] == 7
         assert result['status'] == 'enter'
 
     def test_uptrend_fails_trend_check(self):
@@ -140,6 +159,11 @@ class TestEntryReadinessLongPut:
         result = compute_entry_readiness(row, 'Long Put')
         rsi_check = next(c for c in result['checks'] if 'RSI' in c['label'])
         assert not rsi_check['passed']
+
+    def test_ema_bearish_check_passes(self):
+        result = compute_entry_readiness(_bearish_row(), 'Long Put')
+        ema_check = next(c for c in result['checks'] if 'EMA' in c['label'])
+        assert ema_check['passed']
 
 
 # ── compute_exit_rules ───────────────────────────────────────────────────────

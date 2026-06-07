@@ -9,12 +9,12 @@ import pandas as pd
 
 def compute_entry_readiness(row: dict, strategy: str) -> dict:
     """
-    Evaluate 6 entry conditions for Long Call or Long Put.
+    Evaluate 7 entry conditions for Long Call or Long Put.
 
     Returns:
         status: 'enter' | 'wait' | 'not_yet'
         met: int
-        total: int  (always 6)
+        total: int  (number of checks)
         checks: list of {label, passed, value}
     """
     if strategy not in ('Long Call', 'Long Put'):
@@ -65,6 +65,13 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
                 'passed': days_earn is None or days_earn > 14,
                 'value': f"{days_earn}d" if days_earn is not None else 'none',
             },
+            {
+                'label': 'EMA bullish',
+                'passed': bool(row.get('ema_bull_stack') and row.get('above_ema20')),
+                'value': ('stack+>EMA20'
+                          if (row.get('ema_bull_stack') and row.get('above_ema20'))
+                          else 'no'),
+            },
         ]
     else:
         checks = [
@@ -104,18 +111,26 @@ def compute_entry_readiness(row: dict, strategy: str) -> dict:
                 'passed': days_earn is None or days_earn > 14,
                 'value': f"{days_earn}d" if days_earn is not None else 'none',
             },
+            {
+                'label': 'EMA bearish',
+                'passed': bool(row.get('ema_bear_stack') and not row.get('above_ema20')),
+                'value': ('stack+<EMA20'
+                          if (row.get('ema_bear_stack') and not row.get('above_ema20'))
+                          else 'no'),
+            },
         ]
 
     met = sum(1 for c in checks if c['passed'])
+    total = len(checks)
 
-    if met >= 5:
+    if met >= total - 1:
         status = 'enter'
-    elif met >= 3:
+    elif met >= (total + 1) // 2:
         status = 'wait'
     else:
         status = 'not_yet'
 
-    return {'status': status, 'met': met, 'total': 6, 'checks': checks}
+    return {'status': status, 'met': met, 'total': total, 'checks': checks}
 
 
 def compute_exit_rules(row: dict, strategy: str, rec: dict) -> dict:
