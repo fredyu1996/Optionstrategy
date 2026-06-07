@@ -9,6 +9,7 @@ signals to Telegram. Secrets come from environment variables.
 import json
 import os
 import sys
+import traceback
 
 import alerts
 import sheets
@@ -50,6 +51,7 @@ def run_exit_scan(sa_info: dict, sheet_key: str) -> list:
         return alerts.exit_alerts(analyzed)
     except Exception as exc:
         print(f"exit scan failed: {exc}", file=sys.stderr)
+        traceback.print_exc()
         return []
 
 
@@ -66,6 +68,7 @@ def run_entry_scan() -> list:
         return alerts.entry_alerts(rows)
     except Exception as exc:
         print(f"entry scan failed: {exc}", file=sys.stderr)
+        traceback.print_exc()
         return []
 
 
