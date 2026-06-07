@@ -63,6 +63,14 @@ def test_exit_alerts_flags_sell_and_trim():
     assert out[0]['state'] == 'sell'
 
 
+def test_entry_alerts_skips_malformed_row():
+    import numpy as np
+    bad = _enter_row()
+    bad['rsi'] = np.array([1.0, 2.0])  # non-scalar -> compute_entry_readiness raises
+    # must not raise; the bad row is simply skipped
+    assert entry_alerts([bad]) == []
+
+
 def test_diff_alerts_new_and_changed_only():
     current = [
         {'key': 'entry:AAPL:Long Call', 'state': 'enter'},

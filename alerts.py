@@ -14,7 +14,12 @@ def entry_alerts(rows: list) -> list:
         if not ticker:
             continue
         for strategy in ('Long Call', 'Long Put'):
-            r = compute_entry_readiness(row, strategy)
+            try:
+                r = compute_entry_readiness(row, strategy)
+            except Exception:
+                # A malformed screener row (e.g. a non-scalar field) must not
+                # abort the whole scan; skip just this row/strategy.
+                continue
             if r['status'] == 'enter':
                 out.append({
                     'key': f'entry:{ticker}:{strategy}',
