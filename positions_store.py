@@ -20,6 +20,24 @@ class PositionsConfigError(Exception):
     """Raised when Google Sheets credentials/secrets are not configured."""
 
 
+def _service_account_info() -> dict:
+    """Return the service-account dict from either secrets form.
+
+    Prefers `gcp_service_account_b64` (base64 of the JSON) because pasting raw
+    JSON or a multi-line private_key into Streamlit's TOML secrets editor is
+    error-prone — long lines get wrapped and the key breaks. Whitespace is
+    stripped before decoding so wrapped/indented base64 still works. Falls back
+    to a plain `[gcp_service_account]` TOML table.
+    """
+    import base64
+    import json
+
+    if 'gcp_service_account_b64' in st.secrets:
+        raw = ''.join(str(st.secrets['gcp_service_account_b64']).split())
+        return json.loads(base64.b64decode(raw))
+    return dict(st.secrets['gcp_service_account'])
+
+
 @st.cache_resource(show_spinner=False)
 def _get_client():
     """Authorize the service account (cached — OAuth runs once per session)."""
@@ -28,7 +46,7 @@ def _get_client():
 
     scopes = ['https://www.googleapis.com/auth/spreadsheets']
     creds = Credentials.from_service_account_info(
-        dict(st.secrets['gcp_service_account']), scopes=scopes
+        _service_account_info(), scopes=scopes
     )
     return gspread.authorize(creds)
 
@@ -38,7 +56,8 @@ def get_worksheet():
 
     Raises PositionsConfigError if secrets are missing or libs unavailable.
     """
-    if 'gcp_service_account' not in st.secrets or 'positions_sheet_key' not in st.secrets:
+    has_creds = 'gcp_service_account' in st.secrets or 'gcp_service_account_b64' in st.secrets
+    if not has_creds or 'positions_sheet_key' not in st.secrets:
         raise PositionsConfigError("Missing Google Sheets secrets")
     try:
         client = _get_client()

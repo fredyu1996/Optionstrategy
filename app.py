@@ -520,6 +520,16 @@ def render_positions_page():
             "See the README → **Position Tracking Setup**."
         )
         return
+    except Exception as exc:  # creds present but rejected (auth/API/network)
+        st.error(
+            "Could not connect to Google Sheets — the service-account "
+            f"credentials were rejected.\n\n`{type(exc).__name__}: {exc}`\n\n"
+            "Common causes: the `private_key` in Streamlit secrets is "
+            "malformed, the key was revoked, or the sheet isn't shared with "
+            "the service-account email. Re-check secrets "
+            "(README → **Position Tracking Setup**)."
+        )
+        return
 
     with st.expander("➕ Add a position", expanded=not positions):
         with st.form("add_position_form", clear_on_submit=True):
