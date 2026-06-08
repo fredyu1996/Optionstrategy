@@ -2,14 +2,22 @@ name: Signal Alerts
 
 on:
   schedule:
-    - cron: '0 13-21 * * 1-5'   # hourly, ~US market hours (UTC), Mon-Fri
+    # Off the top of the hour: GitHub drops/delays many ':00' scheduled runs
+    # because that's the busiest slot. Run at :19 instead for reliability.
+    # Hourly during ~US market hours (UTC), Mon-Fri.
+    - cron: '19 13-21 * * 1-5'
   workflow_dispatch: {}
+
+# Avoid overlapping/piled-up runs if a previous scan is still going.
+concurrency:
+  group: signal-alerts
+  cancel-in-progress: false
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
