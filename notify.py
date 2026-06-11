@@ -45,7 +45,7 @@ def _positions_to_dicts(records: list) -> list:
 def run_exit_scan(sa_info: dict, sheet_key: str) -> list:
     """Analyze held positions; return exit alert dicts."""
     try:
-        ws = sheets.open_worksheet(sa_info, sheet_key, 'positions')
+        ws = sheets.open_first_worksheet(sa_info, sheet_key)
         positions = _positions_to_dicts(sheets.get_records(ws))
         analyzed = [{'pos': p, 'data': analyze_position(p)} for p in positions]
         return alerts.exit_alerts(analyzed)

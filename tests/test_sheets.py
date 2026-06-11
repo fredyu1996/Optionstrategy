@@ -2,13 +2,14 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import sheets
-from sheets import open_worksheet, replace_rows
+from sheets import open_worksheet, open_first_worksheet, replace_rows
 
 
 class _FakeSheet:
     def __init__(self, existing=None):
         self._existing = existing or {}
         self.added = []
+        self.sheet1 = 'WS:sheet1'
 
     def worksheet(self, title):
         if title in self._existing:
@@ -50,6 +51,16 @@ def test_open_worksheet_creates_when_missing(monkeypatch):
     ws = open_worksheet({'x': 1}, 'KEY', 'alert_state')
     assert ws == 'WS:alert_state'
     assert sheet.added == ['alert_state']
+
+
+def test_open_first_worksheet_returns_sheet1(monkeypatch):
+    # The alert job must read the SAME tab the app writes to (.sheet1),
+    # not a title-named tab that would be auto-created empty.
+    sheet = _FakeSheet()
+    _patch(monkeypatch, sheet)
+    ws = open_first_worksheet({'x': 1}, 'KEY')
+    assert ws == 'WS:sheet1'
+    assert sheet.added == []
 
 
 def test_replace_rows_clears_then_writes_header_first():
